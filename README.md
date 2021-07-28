@@ -19,3 +19,5 @@ average climbrate (m/s)
 motor temperature (°C)
 currently applied power (%)
 remaining battery capacity (%) [feature not yet enabled]
+
+28.07.2021
