@@ -61,6 +61,10 @@
 #define ClimbHysterese 0.2
 
 int PotiValue = 0;
+int PotiValue1 = 0;
+int PotiValue2 = 0;
+int PotiValue3 = 0;
+int PotiValue4 = 0;
 int PotiSetPower = 0;
 int AllowedPower = 0;
 int LastAllowedPower = 0;
@@ -202,8 +206,12 @@ void loop() {
     AltAverage = (Alt1 + Alt2 + Alt3 +Alt4) / 4;
     
     // read the value from the sensor
-    
-    PotiValue = analogRead(POTI);  
+    PotiValue4  = PotiValue3;
+    PotiValue3  = PotiValue2;
+    PotiValue2  = PotiValue1;
+    PotiValue1  = analogRead(POTI);  
+
+    PotiValue = (PotiValue1 + PotiValue2 + PotiValue3 + PotiValue4) / 4;
 
     // read the setting of the Autothrust switch
       
@@ -305,7 +313,7 @@ void loop() {
            
     }
     
-    PowerPWM = map(AllowedPower, 0, 100, MinPowerPWM, MaxPowerPWM);  // scale  0 - 100% power setting to use it with PWM Signal of Opto Spin    
+    PowerPWM = map(AllowedPower, 0, 100, MinPowerPWM, MaxPowerPWM);  // scale  0 - 100% power setting to use it with PWM Signal of Opto Spin      
     ServoPower.write(PowerPWM);                                      // modulate PWM according to the scaled value
     
 
