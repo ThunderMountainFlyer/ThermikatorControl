@@ -20,8 +20,7 @@
 #include <Adafruit_BMP280.h>
 #include <DallasTemperature.h>
 #include <Servo.h>
-#include "SSD1306Ascii.h"
-#include "SSD1306AsciiWire.h"
+#include "OledGaugeDisplay.h"
 
 
 #define DEBUG false
@@ -67,21 +66,18 @@ int PotiValue3 = 0;
 int PotiValue4 = 0;
 int PotiSetPower = 0;
 int AllowedPower = 0;
-int LastAllowedPower = 0;
 int PowerPWM = 0;   
 int counter = 0;
-int LastMillis = 0;
-int CurrentMillis = 0;
-int intervall = 0;
+unsigned long LastMillis = 0;
+unsigned long CurrentMillis = 0;
+unsigned long intervall = 0;
 int Autothrust = 0;
 int MaxAllowedPower = 0;
 int ReducePower = 0;
 int OverTemp = 0;
 int RemainingAkku = 100;
-int LastRemainingAkku = 100;
 
 int Temperature = 0;
-int LastTemperature = 0;
 
 float Alt1 = 0;
 float Alt2 = 0;
@@ -97,12 +93,6 @@ float VarioAverage = 0;
 
 Adafruit_BMP280 bmp; // I2C
 
-char Line1[12];
-char Line2[12];
-char Line3[12];
-char Line4[12];
-
-
 // Setup a oneWire instance to communicate with any OneWire devices 
 // (not just Maxim/Dallas temperature ICs)
 OneWire oneWire(ONE_WIRE_BUS);
@@ -113,9 +103,7 @@ DallasTemperature sensors(&oneWire);
 
 Servo ServoPower;  // create servo object to control a servo
 
-static char outstr[15];
-
-SSD1306AsciiWire oled;
+OledGaugeDisplay display;
   
 void setup() {
 
@@ -126,13 +114,6 @@ void setup() {
   
   Wire.begin();
   Wire.setClock(100000L);
-
-  oled.begin(&Adafruit128x64, I2C_ADDRESS);
-
-  oled.setFont(fixed_bold10x15); // 12 characters per line !
-  oled.clear();
-  oled.println("Thermikator");
-  oled.println("  Control");
 
   // Start up the library
   sensors.begin();
@@ -160,6 +141,10 @@ void setup() {
 
   pinMode(AutothrustPin, INPUT);
 
+  // Draw only after the initial minimum motor command has been applied.
+  display.begin(I2C_ADDRESS);
+  LastMillis = millis();
+
 }
   
 void loop() {
@@ -183,20 +168,6 @@ void loop() {
 
     #endif
 
-    // clear the display only once in the loop, because this takes 60 ms and causes flicker
-    if (counter == 0 )
-      oled.clear();
-      
-    LastTemperature   = Temperature;
-    LastAllowedPower  = AllowedPower;
-    LastRemainingAkku = RemainingAkku;
-    
-    oled.setCursor(0,0);
-    oled.println(Line1);
-    oled.println(Line2);
-    oled.println(Line3);
-    oled.println(Line4);
-        
     Alt4 = Alt3;
     Alt3 = Alt2;
     Alt2 = Alt1;
@@ -249,21 +220,13 @@ void loop() {
  
     // calculate the current climb/sink rate from altitude gain in current intervall
     
-    Vario1 = (AltAverage - LastAltAverage) * (1000/intervall);
+    Vario1 = intervall ? (AltAverage - LastAltAverage) * (1000.0f / intervall) : 0;
     
     // calculate average climb/sink rate
 
     VarioAverage = (Vario1 + Vario2 + Vario3 + Vario4) / 4;
     if (VarioAverage > 9.9)
       VarioAverage = 9.9;
-    if (VarioAverage < 0)
-      strcpy(Line1, "Vario -");
-    else
-      strcpy(Line1, "Vario  ");
-      
-    dtostrf(abs(VarioAverage), 2, 1, &Line1[strlen(Line1)]);    
-
- 
     // before AT or overtemp calculations, allowed is what is set
     AllowedPower = PotiSetPower;
      
@@ -325,9 +288,7 @@ void loop() {
     
 #endif
       
-    sprintf(Line2, "Temp   %d", Temperature);
-    sprintf(Line3, "Power  %d", AllowedPower);
-    sprintf(Line4, "Akku   %d", RemainingAkku);
+    display.update(VarioAverage, Temperature, AllowedPower, RemainingAkku, Autothrust != 0);
 
     /* measuring temperature via 1 Wire takes quit long ... do it only every 4th time */
     if (counter % 4 == 0 )
@@ -344,24 +305,6 @@ void loop() {
       if (RemainingAkku > 0 ) RemainingAkku--;
     #endif
 
-    clearOld(LastTemperature,Temperature,1);
-    
-    clearOld(LastAllowedPower,AllowedPower,2);
-
-    clearOld(LastRemainingAkku,RemainingAkku,3);
-   
-    counter = counter + 1;   
-}
-
-void clearOld(int OldValue, int NewValue,int LineNr)
-{
-    if (NewValue != OldValue )
-    {
-      if (NewValue < 10)  oled.setCursor(87,LineNr * 2);
-      else
-        if (NewValue < 100 )  oled.setCursor(98,LineNr * 2);
-      
-      oled.println("   ");
-    }  
-  
+    // Only the four-cycle temperature schedule needs this counter.
+    counter = (counter + 1) % 4;
 }
