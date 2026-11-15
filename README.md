@@ -48,7 +48,7 @@ The compact OLED layout uses white pixels on the existing dark background:
 | --- | --- | --- |
 | Vario | Up/down arrows | -2 to +2 m/s, zero centered |
 | Applied motor power | Lightning bolt | 0 to 100% |
-| Motor temperature | Thermometer | 20 to 120 C; fixed 80 C marker |
+| Motor temperature | Thermometer | 20 to 90 C; fixed 80 C marker |
 | Battery | Battery outline | 0 to 100% |
 
 The header blinks the full word `Autothrust` only while the existing switch is
@@ -56,7 +56,7 @@ active. No other text, numeric scale labels or units are displayed. Symbols are 
 scanlines without overlap. The bars are 10 pixels high (previously 5); vario zero and the 80 C threshold
 remain marked without text. Battery remains the original **unmeasured 100% placeholder**.
 
-Gauges round to ten segments: 10 percentage points, 10 C, or 0.4 m/s per
+Gauges round to ten segments: 10 percentage points, 7 C, or 0.4 m/s per
 vario segment. Vario fills left for sinking and right for climbing. Out-of-range
 values saturate the displayed scale; display scaling does not clamp the
 values used for power regulation.
@@ -93,8 +93,8 @@ arduino-cli compile --fqbn arduino:avr:leonardo .
 Leonardo verifies the MCU build; select the actual Pro Micro bootloader and
 8 MHz/16 MHz variant when uploading. Tested with SSD1306Ascii from the local
 Arduino installation. Latest build target: `arduino:avr:yun` (the connected ATmega32U4 board on COM4).
-Build result: **22,806 / 28,672 bytes flash (79%)** and
-**796 / 2,560 bytes static RAM (31%)**, leaving 1,764 bytes for stack/runtime.
+Build result: **22,974 / 28,672 bytes flash (80%)** and
+**798 / 2,560 bytes static RAM (31%)**, leaving 1,762 bytes for stack/runtime.
 The layout and symbol/font bitmaps were also inspected as a pixel preview.
 No physical OLED or propulsion hardware was available.
 
@@ -103,9 +103,35 @@ Before motor operation, test with the motor power circuit disconnected:
 1. Blinking Autothrust header, four symbols and thicker bars, including the bottom
    battery row; no scale labels or other text.
 2. Vario below/above zero, empty/full gauges, and fixed 80 C marker on the
-   20..120 C scale; old filled segments disappear when values decrease.
+   20..90 C scale; old filled segments disappear when values decrease.
 3. Toggle autothrust: the full word starts blinking when enabled and
    disappears completely when disabled, without remnants.
 4. Confirm BMP280 readings remain available after an OLED update, and check
    PWM output/control cadence during changing gauges and temperature limiting.
 5. Check the climb-rate timing beyond the former 16-bit overflow boundary.
+
+
+### OLED warning blink
+
+Battery below 25% and motor temperature above 81 C flash their entire gauge
+(including empty segment outlines) on/off; the identifying symbols remain
+visible. Exactly 25% and exactly 81 C do not activate the warning. Thresholds
+use the unrounded input values, not the ten-segment display state. Temperature
+is currently read into an integer, so the first warning value is 82 C.
+
+Warnings share the existing non-blocking Autothrust blink phase, serviced once
+per control loop. They also blink when Autothrust is off, and return to a steady
+bar when the warning clears. A gauge blink invalidates the affected display
+state even if the segment count has not changed. Header-only blink updates
+still transfer just page 0. The existing motor power reduction above 80 C is
+unchanged; the warning threshold is independent of that control threshold.
+
+Temperature fill is clamped to 20..90 C: empty at/below 20 C, full at/above
+90 C, rounded to the nearest 7 C step. The 80 C marker is repositioned to
+match the new scale. Battery still has no sensor or capacity calculation:
+its original 100% placeholder means the low-battery warning will not occur
+until real capacity data is supplied.
+
+Hardware checks: exercise battery 24/25%, temperature 81/82 C, temperature
+20/90 C, and simultaneous warnings with Autothrust on and off. Verify a warning
+clears even when both input values round to the same number of segments.

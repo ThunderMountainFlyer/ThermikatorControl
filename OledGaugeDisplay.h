@@ -12,9 +12,9 @@ private:
   SSD1306AsciiWire oled;
   uint8_t page = 0;
   uint8_t pixels[128] = {};
-  uint8_t shown[5] = {};
+  uint8_t shown[7] = {};
   bool first = true;
-  bool autothrustActive = false;
+  bool blinkingActive = false;
   bool blinkVisible = false;
   unsigned long lastBlink = 0;
 

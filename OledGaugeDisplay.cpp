@@ -6,7 +6,7 @@
 void OledGaugeDisplay::begin(uint8_t address) {
   oled.begin(&Adafruit128x64, address);
   first = true;
-  autothrustActive = false;
+  blinkingActive = false;
   blinkVisible = false;
   // Paint all eight pages; do not briefly clear before drawing.
   update(0, 20, 0, 100, false);
@@ -16,28 +16,35 @@ void OledGaugeDisplay::update(float vario, int temperature, int power, int batte
                               bool autothrust) {
   // Non-blocking blink, serviced at the existing control-loop cadence.
   const unsigned long now = millis();
-  if (!autothrust) {
-    blinkVisible = false;
-  } else if (!autothrustActive) {
-    blinkVisible = true; // immediately visible when enabled
+  // Warning thresholds use raw values, not rounded gauge segments.
+  const bool hot = temperature > 81;
+  const bool lowBattery = battery < 25;
+  const bool blinkNeeded = autothrust || hot || lowBattery;
+  if (!blinkNeeded) {
+    blinkVisible = true;
+  } else if (!blinkingActive) {
+    blinkVisible = true; // start with a visible phase
     lastBlink = now;
   } else if (now - lastBlink >= 500) {
     blinkVisible = !blinkVisible;
     lastBlink = now;
   }
-  autothrustActive = autothrust;
+  blinkingActive = blinkNeeded;
 
   if (!isfinite(vario)) vario = 0;
   vario = constrain(vario, -2.0f, 2.0f);
   const float steps = vario * 2.5f;
-  const uint8_t next[5] = {
+  const uint8_t next[7] = {
     uint8_t(5 + int(steps + (steps >= 0 ? 0.5f : -0.5f))),
     uint8_t((constrain(power, 0, 100) + 5) / 10),
-    uint8_t((constrain(temperature, 20, 120) - 20 + 5) / 10),
+    uint8_t((constrain(temperature, 20, 90) - 20 + 3) / 7),
     uint8_t((constrain(battery, 0, 100) + 5) / 10),
-    uint8_t(blinkVisible ? 1 : 0)
+    uint8_t(autothrust && blinkVisible ? 1 : 0),
+    uint8_t(!hot || blinkVisible ? 1 : 0),
+    uint8_t(!lowBattery || blinkVisible ? 1 : 0)
   };
-  const bool gaugesChanged = first || memcmp(shown, next, 4) != 0;
+  const bool gaugesChanged = first || memcmp(shown, next, 4) != 0 ||
+    shown[5] != next[5] || shown[6] != next[6];
   if (!gaugesChanged && shown[4] == next[4]) return;
   memcpy(shown, next, sizeof shown);
   first = false;
@@ -106,7 +113,9 @@ void OledGaugeDisplay::renderPage() {
   if (shown[4]) text(PSTR("Autothrust"), 34, 0);
   for (uint8_t row = 0; row < 4; ++row) {
     icon(row, 9 + row * 14);
-    bar(10 + row * 14, shown[row], row == 0);
+    // Keep symbols visible while the entire warning bar flashes on/off.
+    if ((row != 2 || shown[5]) && (row != 3 || shown[6]))
+      bar(10 + row * 14, shown[row], row == 0);
   }
-  rect(84, 37, 1, 12, true); // 80 C on the unchanged 20..120 C scale
+  if (shown[5]) rect(112, 37, 1, 12, true); // 80 C on the 20..90 C scale
 }
