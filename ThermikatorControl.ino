@@ -22,6 +22,7 @@
 #include <Servo.h>
 #include "OledGaugeDisplay.h"
 #include "DisplayTestValues.h"
+#include "UsbTestGate.h"
 
 
 #define DEBUG false
@@ -105,6 +106,8 @@ DallasTemperature sensors(&oneWire);
 Servo ServoPower;  // create servo object to control a servo
 
 OledGaugeDisplay display;
+UsbRunMode usbRunMode = UsbRunMode::Detecting;
+unsigned long usbDetectionStarted = 0;
 bool displayTestActive = false;
 bool measurementsReady = false;
 unsigned long displayTestStarted = 0;
@@ -133,6 +136,7 @@ void initializeMeasurements() {
 }
   
 void setup() {
+  usbDetectionStarted = millis(); // one second from sketch startup, not bootloader entry
 
   #if DEBUG == true
     Serial.begin(9600);
@@ -154,7 +158,14 @@ void setup() {
 }
   
 void loop() {
-    const bool testMode = computerConnected();
+    usbRunMode = nextUsbRunMode(usbRunMode, millis() - usbDetectionStarted,
+                                computerConnected());
+    if (usbRunMode == UsbRunMode::Detecting) {
+      ServoPower.write(MinPowerPWM);
+      delay(1);
+      return;
+    }
+    const bool testMode = usbRunMode == UsbRunMode::Test;
     if (testMode) {
       if (!displayTestActive) {
         displayTestStarted = millis();

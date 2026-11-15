@@ -93,8 +93,8 @@ arduino-cli compile --fqbn arduino:avr:leonardo .
 Leonardo verifies the MCU build; select the actual Pro Micro bootloader and
 8 MHz/16 MHz variant when uploading. Tested with SSD1306Ascii from the local
 Arduino installation. Latest build target: `arduino:avr:yun` (the connected ATmega32U4 board on COM4).
-Build result: **23,472 / 28,672 bytes flash (81%)** and
-**808 / 2,560 bytes static RAM (31%)**, leaving 1,752 bytes for stack/runtime.
+Build result: **23,612 / 28,672 bytes flash (82%)** and
+**813 / 2,560 bytes static RAM (31%)**, leaving 1,747 bytes for stack/runtime.
 The layout and symbol/font bitmaps were also inspected as a pixel preview.
 No physical OLED or propulsion hardware was available.
 
@@ -139,10 +139,22 @@ clears even when both input values round to the same number of segments.
 
 ### Automatic USB bench test
 
-Connecting the native ATmega32U4 USB port to a computer automatically selects
-bench mode, without opening Serial Monitor. Detection requires both USB host
-enumeration and VBUS; a power-only USB charger does not enable it. The mode
-starts a repeating 27.5-second sequence with a new input step every 250 ms:
+USB bench mode may be selected only in the first **1,000 ms after sketch
+startup** (bootloader time is not included). A host must be detected before
+the deadline; at exactly 1,000 ms the window is closed. Detection requires
+native ATmega32U4 USB enumeration and VBUS, without opening Serial Monitor.
+The physical motor output stays at minimum while startup detection is pending.
+
+If no host is recognized within that second, live operation is latched until
+the next reset. Late USB attachment cannot enter bench mode. A host selected
+inside the window keeps bench mode active beyond the startup deadline; once
+disconnection is detected, live operation is latched and reconnecting cannot
+restart the demo. Restart the board with the computer attached to test again.
+This is a software startup interlock, not an independent hardware safety device.
+The transition rules and 999/1,000 ms boundaries are checked by compile-time
+assertions in `UsbTestGate.h`.
+
+Bench mode starts a repeating 27.5-second sequence with a new input step every 250 ms:
 
 - Motor temperature: 20 to 90 C, then hold until the cycle restarts at 20 C.
 - Battery input: 100 down to 0%, hold empty, then restart at 100%.
@@ -170,7 +182,7 @@ logic and UI, not the real-time flight response.
 When USB is disconnected (with separate power maintained), normal sensor
 operation resumes. Measurement/vario history and power reduction state are
 reinitialized and the previous battery value is restored, so simulated values
-do not leak into live measurement history. A reconnect starts the demo from
-the beginning. If USB is the only power source, unplugging simply switches
+do not leak into live measurement history. A reconnect during the same run cannot reenter test mode; only a
+reset reopens the one-second startup window. If USB is the only power source, unplugging simply switches
 the board off. This mode is specific to the current native-USB ATmega32U4
 boards, not ESP8266/NodeMCU USB-serial adapters.
