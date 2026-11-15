@@ -14,6 +14,9 @@ private:
   uint8_t pixels[128] = {};
   uint8_t shown[5] = {};
   bool first = true;
+  bool autothrustActive = false;
+  bool blinkVisible = false;
+  unsigned long lastBlink = 0;
 
   void pixel(int16_t x, int16_t y);
   void rect(uint8_t x, uint8_t y, uint8_t width, uint8_t height, bool filled);

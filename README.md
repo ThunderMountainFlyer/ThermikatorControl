@@ -51,10 +51,10 @@ The compact OLED layout uses white pixels on the existing dark background:
 | Motor temperature | Thermometer | 20 to 120 C; fixed 80 C marker |
 | Battery | Battery outline | 0 to 100% |
 
-The header shows the full word `Autothrust` only while the existing switch is
-active. Symbols are 13 x 12 pixels so four rows plus the header fit in 64
-scanlines without overlap. Labels, degree symbol and battery scale fit within
-the last pixel row. Battery remains the original **unmeasured 100% placeholder**.
+The header blinks the full word `Autothrust` only while the existing switch is
+active. No other text, numeric scale labels or units are displayed. Symbols are 13 x 12 pixels so four rows plus the header fit in 64
+scanlines without overlap. The bars are 10 pixels high (previously 5); vario zero and the 80 C threshold
+remain marked without text. Battery remains the original **unmeasured 100% placeholder**.
 
 Gauges round to ten segments: 10 percentage points, 10 C, or 0.4 m/s per
 vario segment. Vario fills left for sinking and right for climbing. Out-of-range
@@ -66,7 +66,10 @@ symbols in flash. The eight pages are written through the existing
 SSD1306Ascii library, without clearing the screen before each frame.
 The final buffered I2C transaction is flushed before returning to sensor code.
 Updates are checked **every control loop**, with no five-second E-paper delay;
-unchanged visible segments/header skip the display transfer. Updating all
+unchanged visible segments/header skip the display transfer. The blink timer
+is non-blocking: after at least 500 ms the next control loop toggles the header.
+The existing sensor conversion/delay cadence determines the actual blink rate;
+no additional delay is inserted. A header-only change transfers just page 0. Updating all
 pages takes I2C transfer time and is not instantaneous. The existing 100 kHz
 bus clock and temperature conversion/delay cadence remain in use.
 
@@ -89,17 +92,20 @@ arduino-cli compile --fqbn arduino:avr:leonardo .
 
 Leonardo verifies the MCU build; select the actual Pro Micro bootloader and
 8 MHz/16 MHz variant when uploading. Tested with SSD1306Ascii from the local
-Arduino installation. Build result: **22,926 / 28,672 bytes flash (79%)** and
-**790 / 2,560 bytes static RAM (30%)**, leaving 1,770 bytes for stack/runtime.
+Arduino installation. Latest build target: `arduino:avr:yun` (the connected ATmega32U4 board on COM4).
+Build result: **22,806 / 28,672 bytes flash (79%)** and
+**796 / 2,560 bytes static RAM (31%)**, leaving 1,764 bytes for stack/runtime.
 The layout and symbol/font bitmaps were also inspected as a pixel preview.
 No physical OLED or propulsion hardware was available.
 
 Before motor operation, test with the motor power circuit disconnected:
 
-1. Readable header, four symbols and scales, including the bottom battery row.
+1. Blinking Autothrust header, four symbols and thicker bars, including the bottom
+   battery row; no scale labels or other text.
 2. Vario below/above zero, empty/full gauges, and fixed 80 C marker on the
    20..120 C scale; old filled segments disappear when values decrease.
-3. Toggle autothrust: the full word appears/disappears without remnants.
+3. Toggle autothrust: the full word starts blinking when enabled and
+   disappears completely when disabled, without remnants.
 4. Confirm BMP280 readings remain available after an OLED update, and check
    PWM output/control cadence during changing gauges and temperature limiting.
 5. Check the climb-rate timing beyond the former 16-bit overflow boundary.

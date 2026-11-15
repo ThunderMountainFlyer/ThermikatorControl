@@ -6,12 +6,27 @@
 void OledGaugeDisplay::begin(uint8_t address) {
   oled.begin(&Adafruit128x64, address);
   first = true;
+  autothrustActive = false;
+  blinkVisible = false;
   // Paint all eight pages; do not briefly clear before drawing.
   update(0, 20, 0, 100, false);
 }
 
 void OledGaugeDisplay::update(float vario, int temperature, int power, int battery,
                               bool autothrust) {
+  // Non-blocking blink, serviced at the existing control-loop cadence.
+  const unsigned long now = millis();
+  if (!autothrust) {
+    blinkVisible = false;
+  } else if (!autothrustActive) {
+    blinkVisible = true; // immediately visible when enabled
+    lastBlink = now;
+  } else if (now - lastBlink >= 500) {
+    blinkVisible = !blinkVisible;
+    lastBlink = now;
+  }
+  autothrustActive = autothrust;
+
   if (!isfinite(vario)) vario = 0;
   vario = constrain(vario, -2.0f, 2.0f);
   const float steps = vario * 2.5f;
@@ -20,12 +35,15 @@ void OledGaugeDisplay::update(float vario, int temperature, int power, int batte
     uint8_t((constrain(power, 0, 100) + 5) / 10),
     uint8_t((constrain(temperature, 20, 120) - 20 + 5) / 10),
     uint8_t((constrain(battery, 0, 100) + 5) / 10),
-    uint8_t(autothrust ? 1 : 0)
+    uint8_t(blinkVisible ? 1 : 0)
   };
-  if (!first && memcmp(shown, next, sizeof shown) == 0) return;
+  const bool gaugesChanged = first || memcmp(shown, next, 4) != 0;
+  if (!gaugesChanged && shown[4] == next[4]) return;
   memcpy(shown, next, sizeof shown);
   first = false;
-  for (page = 0; page < 8; ++page) {
+  // A blink only changes page 0; do not resend the gauge pages for it.
+  const uint8_t pageCount = gaugesChanged ? 8 : 1;
+  for (page = 0; page < pageCount; ++page) {
     renderPage();
     oled.setCursor(0, page);
     for (uint8_t x = 0; x < 127; ++x) oled.ssd1306WriteRamBuf(pixels[x]);
@@ -78,9 +96,9 @@ void OledGaugeDisplay::bar(uint8_t y, uint8_t value, bool bipolar) {
     const bool filled = bipolar
       ? (value >= 5 ? segment >= 5 && segment < value : segment >= value && segment < 5)
       : segment < value;
-    rect(18 + segment * 11, y, 8, 5, filled);
+    rect(18 + segment * 11, y, 8, 10, filled);
   }
-  if (bipolar) rect(73, y - 1, 1, 7, true);
+  if (bipolar) rect(73, y - 1, 1, 12, true);
 }
 
 void OledGaugeDisplay::renderPage() {
@@ -88,19 +106,7 @@ void OledGaugeDisplay::renderPage() {
   if (shown[4]) text(PSTR("Autothrust"), 34, 0);
   for (uint8_t row = 0; row < 4; ++row) {
     icon(row, 9 + row * 14);
-    bar(9 + row * 14, shown[row], row == 0);
+    bar(10 + row * 14, shown[row], row == 0);
   }
-  text(PSTR("-2"), 18, 15);
-  text(PSTR("0"), 71, 15);
-  text(PSTR("+2m/s"), 98, 15);
-  text(PSTR("0"), 18, 29);
-  text(PSTR("100%"), 104, 29);
-  text(PSTR("20"), 18, 43);
-  text(PSTR("80"), 79, 43);
-  text(PSTR("120"), 100, 43);
-  rect(118, 43, 3, 3, false); // degree mark
-  text(PSTR("C"), 122, 43);
-  rect(84, 36, 1, 7, true); // 80 C on the 20..120 C scale
-  text(PSTR("0"), 18, 57);
-  text(PSTR("100%"), 104, 57);
+  rect(84, 37, 1, 12, true); // 80 C on the unchanged 20..120 C scale
 }
