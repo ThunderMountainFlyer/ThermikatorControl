@@ -93,8 +93,8 @@ arduino-cli compile --fqbn arduino:avr:leonardo .
 Leonardo verifies the MCU build; select the actual Pro Micro bootloader and
 8 MHz/16 MHz variant when uploading. Tested with SSD1306Ascii from the local
 Arduino installation. Latest build target: `arduino:avr:yun` (the connected ATmega32U4 board on COM4).
-Build result: **22,974 / 28,672 bytes flash (80%)** and
-**798 / 2,560 bytes static RAM (31%)**, leaving 1,762 bytes for stack/runtime.
+Build result: **23,472 / 28,672 bytes flash (81%)** and
+**808 / 2,560 bytes static RAM (31%)**, leaving 1,752 bytes for stack/runtime.
 The layout and symbol/font bitmaps were also inspected as a pixel preview.
 No physical OLED or propulsion hardware was available.
 
@@ -135,3 +135,42 @@ until real capacity data is supplied.
 Hardware checks: exercise battery 24/25%, temperature 81/82 C, temperature
 20/90 C, and simultaneous warnings with Autothrust on and off. Verify a warning
 clears even when both input values round to the same number of segments.
+
+
+### Automatic USB bench test
+
+Connecting the native ATmega32U4 USB port to a computer automatically selects
+bench mode, without opening Serial Monitor. Detection requires both USB host
+enumeration and VBUS; a power-only USB charger does not enable it. The mode
+starts a repeating 27.5-second sequence with a new input step every 250 ms:
+
+- Motor temperature: 20 to 90 C, then hold until the cycle restarts at 20 C.
+- Battery input: 100 down to 0%, hold empty, then restart at 100%.
+- Requested power: 0 to 100%, hold full, then back down, repeatedly.
+- Vario input: zero to +2 m/s, hold, through zero to -2 m/s, hold, back to zero.
+
+The real Autothrust switch remains active; it is never mocked. Test values
+are assigned to `Temperature`, `RemainingAkku`, `PotiSetPower` and
+`VarioAverage`, before the existing Autothrust and temperature limiting code.
+The displayed power is **AllowedPower**, not the requested test value. Full
+requested power can therefore be reduced by climb/Autothrust or by simulated
+motor heat; at 90 C thermal limiting permits at most 20%. Warning blinks use
+the same simulated temperature and battery inputs. With Autothrust off, the
+initial cool sweep can show the full power range; with it on, a full gauge
+is intentionally not guaranteed because the real limiter is working.
+
+`PowerPWM` is calculated as usual for inspection, but the physical servo/PWM
+output on pin 9 is held at `MinPowerPWM` throughout USB bench mode. No test
+value commands the real motor. Sensors need not be attached for this mode;
+sensor initialization/conversion is skipped. The animation loop uses a short
+20 ms pause instead of live sensor-conversion delays, so cycle-dependent
+Autothrust adjustments run faster than in live operation. It demonstrates the
+logic and UI, not the real-time flight response.
+
+When USB is disconnected (with separate power maintained), normal sensor
+operation resumes. Measurement/vario history and power reduction state are
+reinitialized and the previous battery value is restored, so simulated values
+do not leak into live measurement history. A reconnect starts the demo from
+the beginning. If USB is the only power source, unplugging simply switches
+the board off. This mode is specific to the current native-USB ATmega32U4
+boards, not ESP8266/NodeMCU USB-serial adapters.

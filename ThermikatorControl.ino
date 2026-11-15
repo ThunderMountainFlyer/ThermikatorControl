@@ -21,6 +21,7 @@
 #include <DallasTemperature.h>
 #include <Servo.h>
 #include "OledGaugeDisplay.h"
+#include "DisplayTestValues.h"
 
 
 #define DEBUG false
@@ -104,6 +105,32 @@ DallasTemperature sensors(&oneWire);
 Servo ServoPower;  // create servo object to control a servo
 
 OledGaugeDisplay display;
+bool displayTestActive = false;
+bool measurementsReady = false;
+unsigned long displayTestStarted = 0;
+int batteryBeforeTest = 100;
+
+bool computerConnected() {
+  // Native ATmega32U4 USB: enumeration, not Serial/DTR. A USB charger
+  // alone does not select demo mode. Check VBUS as well because the USB
+  // core can retain its configured flag after an externally powered unplug.
+  return USBDevice.configured() && (USBSTA & _BV(VBUS));
+}
+
+void initializeMeasurements() {
+  sensors.begin();
+  bmp.begin(BMP280_ADDRESS_ALT);
+  sensors.requestTemperatures();
+  Temperature = sensors.getTempCByIndex(0);
+  Alt1 = bmp.readAltitude(StandardPressure);
+  Alt2 = Alt3 = Alt4 = AltAverage = LastAltAverage = Alt1;
+  Vario1 = Vario2 = Vario3 = Vario4 = VarioAverage = 0;
+  PotiValue1 = PotiValue2 = PotiValue3 = PotiValue4 = 0;
+  ReducePower = 0;
+  counter = 0;
+  LastMillis = millis();
+  measurementsReady = true;
+}
   
 void setup() {
 
@@ -115,27 +142,6 @@ void setup() {
   Wire.begin();
   Wire.setClock(100000L);
 
-  // Start up the library
-  sensors.begin();
- 
-  bmp.begin(BMP280_ADDRESS_ALT);
-
-  #if DEBUG == true
-    if (!bmp.begin(BMP280_ADDRESS_ALT)) {  
-    Serial.println("no valid BME280");
-  }
-  #endif
-
-  sensors.requestTemperatures(); // Send the command to get temperatures
-  Temperature = sensors.getTempCByIndex(0);      
-
-  Alt1 = bmp.readAltitude(StandardPressure);
-  Alt2 = Alt1;
-  Alt3 = Alt1;
-  Alt4 = Alt1;
-  LastAltAverage = Alt1;
-  LastMillis = millis(); 
-  
   ServoPower.attach(9);  // attaches the servo on pin 9 to the servo object
   ServoPower.write(MinPowerPWM);
 
@@ -148,7 +154,27 @@ void setup() {
 }
   
 void loop() {
-    
+    const bool testMode = computerConnected();
+    if (testMode) {
+      if (!displayTestActive) {
+        displayTestStarted = millis();
+        batteryBeforeTest = RemainingAkku;
+        ReducePower = 0;
+        displayTestActive = true;
+      }
+      measurementsReady = false;
+      const DisplayTestValues test = displayTestValues(millis() - displayTestStarted);
+      // Inject controller inputs, never the displayed/allowed output power.
+      Temperature = test.temperature;
+      RemainingAkku = test.battery;
+      PotiSetPower = test.power;
+      VarioAverage = test.vario;
+    } else {
+      if (displayTestActive) RemainingAkku = batteryBeforeTest;
+      displayTestActive = false;
+      // Reset sensor history after USB demo; do not differentiate demo duration.
+      if (!measurementsReady) initializeMeasurements();
+
     #if DEBUG == true
       Serial.print(F("Temperature = "));
       Serial.print(bmp.readTemperature());
@@ -227,6 +253,10 @@ void loop() {
     VarioAverage = (Vario1 + Vario2 + Vario3 + Vario4) / 4;
     if (VarioAverage > 9.9)
       VarioAverage = 9.9;
+    }
+    // Always use the actual physical switch, including in USB test mode.
+    Autothrust = digitalRead(AutothrustPin);
+
     // before AT or overtemp calculations, allowed is what is set
     AllowedPower = PotiSetPower;
      
@@ -277,7 +307,7 @@ void loop() {
     }
     
     PowerPWM = map(AllowedPower, 0, 100, MinPowerPWM, MaxPowerPWM);  // scale  0 - 100% power setting to use it with PWM Signal of Opto Spin      
-    ServoPower.write(PowerPWM);                                      // modulate PWM according to the scaled value
+    ServoPower.write(testMode ? MinPowerPWM : PowerPWM); // demo exercises logic, not the physical motor
     
 
 #if DEBUGINTERVALL == true
@@ -289,6 +319,12 @@ void loop() {
 #endif
       
     display.update(VarioAverage, Temperature, AllowedPower, RemainingAkku, Autothrust != 0);
+
+    if (testMode) {
+      // Service the animation and blink without blocking on absent sensors.
+      delay(20);
+      return;
+    }
 
     /* measuring temperature via 1 Wire takes quit long ... do it only every 4th time */
     if (counter % 4 == 0 )
