@@ -28,6 +28,8 @@ OledGaugeDisplay display;
 SSD1306AsciiWire legacy;
 bool haveBmp = false, haveTemperature = false, haveOled = false;
 bool reported = false;
+bool switchRaw = false, switchStable = false, switchArmed = false;
+unsigned long switchChangedAt = 0;
 uint8_t forcedControl = 0, cycleMode = 0, cycleIndex = 0;
 volatile float measuredFloat;
 volatile int measuredInt;
@@ -223,6 +225,7 @@ void cycleBenchmarks() {
 }
 
 void runMeasurements() {
+  Serial.println(F("# START. Trigger: physical Autothrust switch"));
   Serial.println(F("# HardwareTiming / ATmega32U4 / OLED snapshot 3dee895"));
   Serial.println(F("# Units: microseconds; I2C=100000 Hz; interrupts and Servo enabled"));
   Serial.println(F("# raw;metric;sample;duration_us;valid"));
@@ -244,7 +247,7 @@ void runMeasurements() {
   componentBenchmarks();
   displayBenchmarks();
   cycleBenchmarks();
-  Serial.println(F("# DONE. Send r + Enter to repeat. Measurements are not flight certification."));
+  Serial.println(F("# DONE. Switch OFF then ON for another run. Bench diagnostic only."));
 }
 
 void setup() {
@@ -258,6 +261,27 @@ void setup() {
 
 void loop() {
   if (!Serial) { reported = false; delay(10); return; }
-  if (!reported) { delay(500); runMeasurements(); reported = true; }
-  if (Serial.available() && Serial.read() == 'r') runMeasurements();
+  if (!reported) {
+    // An already enabled switch must not start a run when USB is opened.
+    switchRaw = switchStable = digitalRead(AutothrustPin) != 0;
+    switchArmed = !switchStable;
+    switchChangedAt = millis();
+    Serial.println(F("# READY. Set Autothrust switch OFF, then ON to start."));
+    reported = true;
+  }
+  const bool raw = digitalRead(AutothrustPin) != 0;
+  if (raw != switchRaw) {
+    switchRaw = raw;
+    switchChangedAt = millis();
+  }
+  if (raw != switchStable && millis() - switchChangedAt >= 50) {
+    switchStable = raw;
+    if (!switchStable) switchArmed = true;
+    else if (switchArmed) {
+      switchArmed = false;
+      runMeasurements(); // single run; debounce/USB waiting is not timed
+    }
+  }
+  while (Serial.available()) Serial.read(); // no serial command starts a run
+  delay(1);
 }

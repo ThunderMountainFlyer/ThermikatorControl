@@ -18,10 +18,16 @@ Schubregelung, keinen USB-Anzeigetest und keine simulierten Sensorzeiten.
    Adafruit BusIO, DallasTemperature, OneWire, Servo und SSD1306Ascii.
 5. Kompilieren und hochladen. Die Firmware ist ausschließlich für ATmega32U4
    vorgesehen, nicht für eine ESP8266-NodeMCU.
-6. Seriellen Monitor auf **115200 Baud** öffnen. Die Messung startet automatisch,
-   sobald der Monitor den USB-Port öffnet. Sie braucht typischerweise etwa eine
-   Minute. Bis zur Zeile `# DONE.` warten.
-7. Für eine Wiederholung `r` und Enter senden oder den Port schließen/neu öffnen.
+6. Seriellen Monitor auf **115200 Baud** öffnen. Nach `# READY.` den Autothrust-Schalter **AUS und dann EIN** schalten.
+   Erst diese Betätigung startet die Messung. Sie braucht typischerweise etwa
+   eine Minute. Bis zur Zeile `# DONE.` warten.
+7. Für eine Wiederholung den Schalter wieder AUS und dann EIN schalten.
+   Ein bereits eingeschalteter Schalter löst beim Öffnen von USB keinen Lauf aus.
+   Der Eingang an Pin 10 wird 50 ms entprellt. Einschalten bedeutet wie im
+   Steuerprogramm HIGH; die vorhandene Schalterbeschaltung bleibt unverändert.
+   Der serielle Monitor bzw. das Aufnahmeskript muss zum Start verbunden sein.
+   Während eines Laufs werden Schalterbetätigungen nicht als weitere Starts
+   gespeichert; zum Wiederholen nach dem Ende neu schalten.
 
 Alternativ kann die Ausgabe mit `Messung-speichern.ps1` im Paket gespeichert
 werden. Dabei den seriellen Monitor geschlossen lassen:
@@ -30,7 +36,10 @@ werden. Dabei den seriellen Monitor geschlossen lassen:
 ./Messung-speichern.ps1 -Port COM4
 ```
 
-Das Skript schreibt eine datierte Textdatei neben sich. Falls Windows Skripte
+Das Skript schreibt eine datierte Textdatei neben sich und wartet bis zu zehn
+Minuten auf den Schalterstart. Danach hat der Messlauf 180 Sekunden Zeit.
+Für eine weitere Aufnahme das Skript erneut starten und den Schalter neu
+AUS/EIN betätigen. Falls Windows Skripte
 blockiert, kann die Ausgabe stattdessen aus dem seriellen Monitor kopiert werden.
 Die vollständige Datei zur Auswertung zurückgeben.
 
@@ -124,7 +133,7 @@ Ein OLED-ACK bestätigt nur die I2C-Adresse, nicht die optische Darstellung.
 ## Verifizierter Build
 
 Arduino AVR Boards 1.8.6, Ziel `arduino:avr:yun`, 16 MHz:
-27.790 / 28.672 Byte Flash (96%), 753 / 2.560 Byte statisches RAM (29%).
+28.016 / 28.672 Byte Flash (97%), 760 / 2.560 Byte statisches RAM (29%).
 Erfolgreich kompiliert; Laufzeiten müssen mit den tatsächlich angeschlossenen
 Sensoren und dem Display erfasst werden.
 
