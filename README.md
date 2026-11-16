@@ -186,3 +186,12 @@ do not leak into live measurement history. A reconnect during the same run canno
 reset reopens the one-second startup window. If USB is the only power source, unplugging simply switches
 the board off. This mode is specific to the current native-USB ATmega32U4
 boards, not ESP8266/NodeMCU USB-serial adapters.
+
+
+### Separate timing diagnostic
+
+`diagnostics/HardwareTiming/HardwareTiming.ino` is an independent bench firmware
+for real sensor/display timing measurements. Its README describes flashing,
+metrics, limitations and the original-vs-gauge display comparison. The companion
+`diagnostics/Messung-speichern.ps1` captures the USB output. This diagnostic
+replaces the controller when flashed; restore the controller firmware afterward.
