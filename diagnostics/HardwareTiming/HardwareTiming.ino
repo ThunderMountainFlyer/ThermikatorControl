@@ -7,6 +7,13 @@
 #include <Servo.h>
 #include "OledGaugeDisplay.h"
 #include <math.h>
+#include "MotorTemperature.h"
+
+// The original full baseline is still available with this flag set to 1.
+// The async edition omits only the old large-font text tests to fit the AVR.
+#ifndef LEGACY_BASELINE
+#define LEGACY_BASELINE 0
+#endif
 
 #if !defined(__AVR_ATmega32U4__)
 #error Select the actual ATmega32U4 board (current hardware: Arduino Yun).
@@ -25,7 +32,9 @@ OneWire oneWire(TemperaturePin);
 DallasTemperature sensors(&oneWire);
 Servo motor;
 OledGaugeDisplay display;
+#if LEGACY_BASELINE
 SSD1306AsciiWire legacy;
+#endif
 bool haveBmp = false, haveTemperature = false, haveOled = false;
 bool reported = false;
 bool switchRaw = false, switchStable = false, switchArmed = false;
@@ -47,6 +56,7 @@ struct Stats {
 };
 
 void summary(const __FlashStringHelper* name, const Stats& s) {
+  if (!s.count) return;
   Serial.print(F("summary;")); Serial.print(name); Serial.print(';');
   Serial.print(s.count); Serial.print(';'); Serial.print(s.shortest);
   Serial.print(';'); Serial.print(s.sum / s.count); Serial.print(';');
@@ -109,16 +119,16 @@ bool waitBmpIdle() {
 void forcedConversionBench() {
   uint8_t originalControl;
   if (!readBmpRegister(0xF4, originalControl)) {
-    Serial.println(F("# ERROR: BMP280 control register unreadable"));
+    Serial.println(F("# ERROR: BMP280 ctrl read"));
     return;
   }
-  Serial.print(F("# BMP280 ctrl_meas before forced test: 0x"));
+  Serial.print(F("# BMP280 ctrl_meas: 0x"));
   Serial.println(originalControl, HEX);
   // Keep exactly the oversampling/filter settings selected by bmp.begin().
   const uint8_t sleepingControl = originalControl & 0xFC;
   if (!writeBmpRegister(0xF4, sleepingControl) || !waitBmpIdle()) {
     writeBmpRegister(0xF4, originalControl);
-    Serial.println(F("# ERROR: BMP280 could not enter idle"));
+    Serial.println(F("# ERROR: BMP280 idle"));
     return;
   }
   forcedControl = sleepingControl;
@@ -136,7 +146,7 @@ void forcedConversionBench() {
     return false;
   });
   const bool restored = writeBmpRegister(0xF4, originalControl) && waitBmpIdle();
-  Serial.println(restored ? F("# BMP280 original mode restored") : F("# ERROR: BMP280 restore failed"));
+  Serial.println(restored ? F("# BMP280 mode restored") : F("# ERROR: BMP280 restore"));
   if (!restored) haveBmp = false;
 }
 
@@ -157,7 +167,7 @@ void componentBenchmarks() {
       measuredFloat = sensors.getTempCByIndex(0);
       return measuredFloat != DEVICE_DISCONNECTED_C;
     });
-  } else Serial.println(F("# SKIP temperature: no OneWire sensor on pin 8"));
+  } else Serial.println(F("# SKIP temperature: no sensor at pin 8"));
 
   if (haveBmp) {
     bench(F("bmp_temperature_register_read"), [](){measuredFloat = bmp.readTemperature(); return isfinite(measuredFloat);});
@@ -168,7 +178,8 @@ void componentBenchmarks() {
 }
 
 void displayBenchmarks() {
-  if (!haveOled) { Serial.println(F("# SKIP OLED: no ACK at 0x3C")); return; }
+  if (!haveOled) { Serial.println(F("# SKIP OLED: no ACK")); return; }
+#if LEGACY_BASELINE
   legacy.begin(&Adafruit128x64, OledAddress);
   legacy.setFont(fixed_bold10x15);
   bench(F("legacy_oled_clear"), [](){legacy.clear(); return true;});
@@ -178,6 +189,7 @@ void displayBenchmarks() {
     legacy.println(F("Power  50")); legacy.println(F("Akku   100"));
     return true;
   });
+#endif
   bench(F("gauge_display_begin"), [](){display.begin(OledAddress); return true;});
   bench(F("gauge_unchanged"), [](){display.update(0, 40, 50, 100, false);},
     [](){display.update(0, 40, 50, 100, false); return true;});
@@ -195,11 +207,113 @@ void displayBenchmarks() {
   }, [](){display.update(0, 85, 50, 20, false); return true;});
 }
 
+#if !LEGACY_BASELINE
+// Instrument the actual bus calls while using the byte-identical production
+// async reader. No serial output occurs within the acquisition phases.
+class TimedTemperatureBus : public DallasTemperature {
+public:
+  explicit TimedTemperatureBus(OneWire* wire) : DallasTemperature(wire) {}
+  Stats requestTime, probeTime, readTime, requestInterval;
+  uint32_t lastRequest = 0;
+  uint16_t requests = 0, reads = 0, probes = 0;
+  void requestTemperatures() {
+    const uint32_t start = micros();
+    DallasTemperature::requestTemperatures();
+    const uint32_t completed = micros();
+    requestTime.add(completed - start, true);
+    if (requests) requestInterval.add(completed - lastRequest, true);
+    lastRequest = completed;
+    ++requests;
+  }
+  bool isConversionComplete() {
+    const uint32_t start = micros();
+    const bool ready = DallasTemperature::isConversionComplete();
+    probeTime.add(micros() - start, true); // busy is not an error
+    ++probes;
+    return ready;
+  }
+  float getTempC(const uint8_t* address) {
+    const uint32_t start = micros();
+    const float value = DallasTemperature::getTempC(address);
+    readTime.add(micros() - start, isfinite(value) && value != DEVICE_DISCONNECTED_C);
+    ++reads;
+    return value;
+  }
+};
+
+void asyncTemperatureBenchmarks() {
+  if (!haveTemperature) {
+    Serial.println(F("# SKIP async: no temperature sensor"));
+    return;
+  }
+  for (uint8_t mode = 0; mode < 3; ++mode) {
+    // Separate instances reset all discovery, request and fault state per phase.
+    TimedTemperatureBus timedBus(&oneWire);
+    AsyncMotorTemperature<TimedTemperatureBus> reader(timedBus);
+    Stats pollBusy, pollIdle, pollStart, pollResult, resultInterval, resultAge, cycle;
+    Serial.print(F("# ASYNC phase ")); Serial.print(mode);
+    Serial.println(F(": see README for phase meaning"));
+    Serial.flush();
+    if (haveOled) display.update(0, 40, mode == 2 ? 100 : 0, 100, false);
+    reader.begin();
+    const uint32_t phaseStart = millis();
+    uint32_t lastResult = 0;
+    uint8_t results = 0, iteration = 0;
+    while (results < 3 && millis() - phaseStart < 20000UL && Serial) {
+      const uint32_t cycleStart = micros();
+      const uint16_t beforeRequests = timedBus.requests, beforeReads = timedBus.reads, beforeProbes = timedBus.probes;
+      const uint32_t pollStartUs = micros();
+      const bool fresh = reader.poll();
+      const uint32_t pollUs = micros() - pollStartUs;
+      if (timedBus.reads != beforeReads) pollResult.add(pollUs, fresh);
+      else if (timedBus.requests != beforeRequests) pollStart.add(pollUs, true);
+      else if (timedBus.probes != beforeProbes) pollBusy.add(pollUs, true);
+      else pollIdle.add(pollUs, !reader.faulted());
+      if (fresh) {
+        const uint32_t completed = micros();
+        resultAge.add(completed - timedBus.lastRequest, true);
+        if (results) resultInterval.add(completed - lastResult, true);
+        lastResult = completed;
+        measuredFloat = reader.value();
+        ++results;
+      }
+      if (mode) {
+        if (haveBmp) measuredFloat = bmp.readAltitude(ReferencePressure);
+        measuredInt = analogRead(PotiPin);
+        measuredInt = digitalRead(AutothrustPin);
+        motor.write(MinimumMotorCommand);
+        if (haveOled) display.update(0, 40, mode == 2 ? ((iteration & 1) ? 100 : 0) : 0, 100, false);
+        delay(OriginalPauseMs);
+      } else delay(10);
+      cycle.add(micros() - cycleStart, true);
+      ++iteration;
+    }
+    // Mode comments above identify each following summary group.
+    summary(F("async_request_command"), timedBus.requestTime);
+    summary(F("async_ready_probe"), timedBus.probeTime);
+    summary(F("async_cached_read"), timedBus.readTime);
+    summary(F("async_poll_busy"), pollBusy);
+    summary(F("async_poll_idle"), pollIdle);
+    summary(F("async_poll_start"), pollStart);
+    summary(F("async_poll_result"), pollResult);
+    summary(F("async_request_interval"), timedBus.requestInterval);
+    summary(F("async_result_interval"), resultInterval);
+    summary(F("async_request_to_result"), resultAge);
+    summary(F("async_cycle_total"), cycle);
+    Serial.print(F("# ASYNC valid results: ")); Serial.println(results);
+    Serial.print(F("# ASYNC fault: ")); Serial.println(reader.faulted() ? 1 : 0);
+    if (results < 3) Serial.println(F("# ASYNC incomplete: timeout/USB"));
+    // Let a pending conversion finish before any subsequent sensor discovery.
+    delay(800);
+  }
+}
+#endif
+
 // Representative live-like cycles, NOT the full flight controller. No mock
 // sensor timings: they really read sensors and wait/convert like the old loop.
 void cycleBenchmarks() {
   if (!haveBmp || !haveTemperature || !haveOled) {
-    Serial.println(F("# SKIP cycles: BMP280, OneWire sensor and OLED all required"));
+    Serial.println(F("# SKIP cycles: device missing"));
     return;
   }
   for (uint8_t mode = 0; mode < 2; ++mode) {
@@ -225,9 +339,9 @@ void cycleBenchmarks() {
 }
 
 void runMeasurements() {
-  Serial.println(F("# START. Trigger: physical Autothrust switch"));
-  Serial.println(F("# HardwareTiming / ATmega32U4 / OLED snapshot 3dee895"));
-  Serial.println(F("# Units: microseconds; I2C=100000 Hz; interrupts and Servo enabled"));
+  Serial.println(F("# START. Switch trigger"));
+  Serial.println(F("# HardwareTiming v2 / async + baseline"));
+  Serial.println(F("# us; I2C=100kHz; IRQ/Servo on"));
   Serial.println(F("# raw;metric;sample;duration_us;valid"));
   Serial.println(F("# summary;metric;count;min_us;mean_us;max_us;errors"));
   haveOled = probe(OledAddress);
@@ -238,6 +352,7 @@ void runMeasurements() {
   Serial.print(F("raw;bmp_begin;1;")); Serial.print(bmpElapsed); Serial.print(';'); Serial.println(haveBmp ? 1 : 0);
   const uint32_t temperatureStart = micros();
   sensors.begin();
+  sensors.setWaitForConversion(true); // old benchmark stays blocking on reruns
   const uint32_t temperatureElapsed = micros() - temperatureStart;
   haveTemperature = sensors.getDeviceCount() > 0;
   Serial.print(F("raw;onewire_begin;1;")); Serial.print(temperatureElapsed); Serial.print(';'); Serial.println(haveTemperature ? 1 : 0);
@@ -246,8 +361,13 @@ void runMeasurements() {
   Serial.print(F("# OneWire parasite power: ")); Serial.println(sensors.isParasitePowerMode() ? 1 : 0);
   componentBenchmarks();
   displayBenchmarks();
+#if LEGACY_BASELINE
   cycleBenchmarks();
-  Serial.println(F("# DONE. Switch OFF then ON for another run. Bench diagnostic only."));
+#endif
+#if !LEGACY_BASELINE
+  asyncTemperatureBenchmarks();
+#endif
+  Serial.println(F("# DONE. Switch OFF/ON to repeat."));
 }
 
 void setup() {
@@ -266,7 +386,7 @@ void loop() {
     switchRaw = switchStable = digitalRead(AutothrustPin) != 0;
     switchArmed = !switchStable;
     switchChangedAt = millis();
-    Serial.println(F("# READY. Set Autothrust switch OFF, then ON to start."));
+    Serial.println(F("# READY. Switch OFF then ON."));
     reported = true;
   }
   const bool raw = digitalRead(AutothrustPin) != 0;

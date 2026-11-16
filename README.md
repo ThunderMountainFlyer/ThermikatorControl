@@ -243,5 +243,5 @@ bus and controlled time source. Its **21 runtime checks passed on the connected
 ATmega32U4**, including busy/completed reads, 4,999/5,000 ms scheduling, missing
 sensor, invalid read, recovery, timeout, cached address, parasite waiting and
 `millis()` rollover. These are state-machine tests, not measurements of the real
-sensor's new acquisition timing. The independent HardwareTiming benchmark
-remains unchanged as a record of the original blocking baseline.
+sensor's new acquisition timing. The independent HardwareTiming v2 benchmark compares the blocking baseline
+with actual asynchronous acquisition, request/result intervals and cycle times.

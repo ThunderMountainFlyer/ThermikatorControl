@@ -1,4 +1,4 @@
-# HardwareTiming - Laufzeiten am echten Aufbau messen
+# HardwareTiming v2 - asynchrone Temperaturmessung und Vergleich
 
 Eigenständiger Diagnose-Sketch für das bisher als **Arduino Yún / ATmega32U4**
 erkannte Board. Er ersetzt beim Flashen das Steuerprogramm. Er enthält keine
@@ -20,7 +20,8 @@ Schubregelung, keinen USB-Anzeigetest und keine simulierten Sensorzeiten.
    vorgesehen, nicht für eine ESP8266-NodeMCU.
 6. Seriellen Monitor auf **115200 Baud** öffnen. Nach `# READY.` den Autothrust-Schalter **AUS und dann EIN** schalten.
    Erst diese Betätigung startet die Messung. Sie braucht typischerweise etwa
-   eine Minute. Bis zur Zeile `# DONE.` warten.
+   eine Minute. Bis zur Zeile `# DONE.` warten. Mit den zusätzlichen asynchronen Phasen
+   dauert ein vollständiger Lauf etwa ein bis zwei Minuten.
 7. Für eine Wiederholung den Schalter wieder AUS und dann EIN schalten.
    Ein bereits eingeschalteter Schalter löst beim Öffnen von USB keinen Lauf aus.
    Der Eingang an Pin 10 wird 50 ms entprellt. Einschalten bedeutet wie im
@@ -76,6 +77,13 @@ Es werden acht Wiederholungen je Kennzahl erfasst. Einheit ist **Mikrosekunden**
 | `cycle_static_display` | Beispielzyklus mit unveränderter Anzeige |
 | `cycle_changing_display` | Beispielzyklus mit vollständigem Displayupdate |
 
+Die großen alten Textanzeige-Tests (`legacy_oled_clear`,
+`legacy_oled_four_text_lines`) und die beiden alten `cycle_...`-Messungen sind
+im neuen Standardlauf nicht aktiv. Sie passen nicht gemeinsam mit allen
+asynchronen Messungen in den AVR-Flash. Die ursprünglichen Messprotokolle
+bleiben die Vergleichsbasis. Mit `LEGACY_BASELINE=1` im Sketch lassen sich
+stattdessen die alten Tests ohne die neuen Async-Phasen kompilieren.
+
 Die OneWire-Gerätezahl, maximale konfigurierte Auflösung und parasitäre
 Versorgung werden mit ausgegeben. Die BMP280-Einstellungen werden durch
 `bmp.begin()` wie im Steuerprogramm gesetzt. `ctrl_meas` wird vor dem
@@ -83,7 +91,7 @@ Wandlungstest ausgegeben. Für diesen Test wird kurz in Sleep/Forced gewechselt;
 Oversampling und Filter bleiben unverändert, danach wird der ursprüngliche Modus
 wiederhergestellt. Ein Fehler beim Wiederherstellen wird gemeldet.
 
-Bei den Beispielzyklen wird in Durchlauf 1 und 5 tatsächlich die Temperatur
+Nur im optionalen Legacy-Baseline-Modus wird in Durchlauf 1 und 5 tatsächlich die Temperatur
 gewandelt und gelesen. Die übrigen Durchläufe warten die bisherigen 638 ms.
 Zusätzlich laufen Höhenmessung, Poti-/Schalterabfrage, Minimal-PWM-Befehl und
 Displayupdate. Es ist **kein exakter Nachbau der gesamten Regelschleife**:
@@ -133,7 +141,7 @@ Ein OLED-ACK bestätigt nur die I2C-Adresse, nicht die optische Darstellung.
 ## Verifizierter Build
 
 Arduino AVR Boards 1.8.6, Ziel `arduino:avr:yun`, 16 MHz:
-28.016 / 28.672 Byte Flash (97%), 760 / 2.560 Byte statisches RAM (29%).
+28.618 / 28.672 Byte Flash (99%), 738 / 2.560 Byte statisches RAM (28%).
 Erfolgreich kompiliert; Laufzeiten müssen mit den tatsächlich angeschlossenen
 Sensoren und dem Display erfasst werden.
 
@@ -143,3 +151,57 @@ arduino-cli compile --fqbn arduino:avr:yun HardwareTiming
 
 Im Downloadpaket liegt zusätzlich die dafür kompilierte HEX-Datei unter
 `firmware`. Sie ist nur für den genannten Board-/Taktstand vorgesehen.
+
+
+## Neue asynchrone Messphasen
+
+Die lokale Datei `MotorTemperature.h` ist bytegleich mit dem Temperaturcode
+aus dem Steuerprogramm, Commit 6ed1bd7. Ein abgeleitetes DallasTemperature-
+Busobjekt misst die realen Methodenaufrufe; es werden keine Sensordaten
+simuliert. Interrupts und Minimal-PWM bleiben aktiv. Während einer Phase wird
+keine Serienausgabe ausgeführt; die gesammelten Zusammenfassungen folgen danach.
+Der zusätzliche Instrumentierungsaufwand gehört zu den gemessenen Gesamtzeiten.
+
+Die Kommentarzeile `# ASYNC phase ...` ordnet die nachfolgenden Summary-Zeilen
+zu. **Die gleichen Kennzahlnamen kommen in jeder Phase erneut vor**; beim
+Auswerten die Phasennummer berücksichtigen, nicht die Werte überschreiben.
+
+- **Phase 0:** Fertigabfrage mit 10-ms-Pause, ohne Druck-/Displayarbeit.
+- **Phase 1:** Beispielzyklus mit Druck-/Poti-/Schalterabfrage, statischer
+  Anzeige und 638-ms-Pause.
+- **Phase 2:** Derselbe Beispielzyklus, aber jedes Mal vollständiges Balkenupdate.
+
+Pro Phase werden drei gültige neue Temperaturwerte angestrebt. Nach 20 Sekunden
+oder bei geschlossenem USB-Port endet die Phase auch ohne drei Werte; der
+Abschluss meldet gültige Ergebnisse und Fehlerstatus. Bei fehlendem Sensor wird
+der Async-Teil übersprungen. Die Schalter-Entprellung und Vorbereitungen gehören
+nicht zur gemessenen Zykluszeit. Die 638-ms-Phasen sind weiterhin Beispielzyklen,
+keine Messung der kompletten Autothrust-/Glättungsberechnung.
+
+| Neue Kennzahl | Bedeutung |
+| --- | --- |
+| `async_request_command` | Nur Wandlungsbefehl, ohne auf das Ergebnis zu warten |
+| `async_ready_probe` | Einzelne Fertigabfrage; BUSY ist kein Fehler |
+| `async_cached_read` | Tatsächliches Auslesen über gespeicherte ROM-Adresse |
+| `async_poll_busy` | Kompletter Reader-Aufruf bei noch laufender Wandlung |
+| `async_poll_idle` | Reader-Aufruf zwischen Messungen, ohne fällige Arbeit |
+| `async_poll_start` | Reader-Aufruf, der die nächste Wandlung startet |
+| `async_poll_result` | Reader-Aufruf, der ein Ergebnis ausliest/validiert |
+| `async_request_interval` | Abstand zwischen zwei abgeschlossenen Startbefehlen |
+| `async_result_interval` | Abstand zwischen zwei gültigen Ergebnissen |
+| `async_request_to_result` | Start bis Übernahme inklusive Abfragetakt und Auslesen |
+| `async_cycle_total` | Tatsächliche Laufzeit eines Beispielzyklus einschließlich Pause |
+
+`async_request_to_result` ist nicht die reine physikalische Wandlungszeit. Bei
+seltenen Abfragen wartet ein fertiger Sensor bis zum nächsten `poll()`; außerdem
+kommt das Auslesen hinzu. Die schnelle Phase macht diesen Unterschied sichtbar.
+Fehlende Statistikzeilen bedeuten, dass kein Aufruf dieses Typs stattfand.
+Fehlerhafte Auslesevorgänge werden mit Fehlerzähler erfasst; die alte gültige
+Temperatur wird vom Reader behalten. Ein mangels Ergebnissen abgebrochener Lauf
+ist keine bestandene Funktionsprüfung.
+
+Das Aufnahmeskript und der Ablauf bleiben gleich: USB-Aufnahme öffnen, dann
+Autothrust-Schalter AUS und EIN. Weder USB allein noch der Sensor starten die
+Messreihe automatisch. Ein Lauf enthält weiterhin die blockierenden Temperatur-
+Einzelmessungen als direkte Vergleichswerte; das ist bei dieser Diagnose
+beabsichtigt und sagt nichts über den Aufrufmodus im neuen Steuerprogramm aus.
