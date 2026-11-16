@@ -71,12 +71,13 @@ is non-blocking: after at least 500 ms the next control loop toggles the header.
 The existing sensor conversion/delay cadence determines the actual blink rate;
 no additional delay is inserted. A header-only change transfers just page 0. Updating all
 pages takes I2C transfer time and is not instantaneous. The existing 100 kHz
-bus clock and temperature conversion/delay cadence remain in use.
+bus clock and 638 ms control pause remain in use. Temperature conversion is now
+non-blocking and requested independently at approximately five-second intervals.
 
 The new UI is updated after applying the current motor command. Loop timing
 uses unsigned `millis()` values and guarded floating-point division, avoiding
 the old signed 16-bit rollover, division by zero and integer truncation. The
-temperature scheduling counter wraps every four cycles. These timing fixes
+temperature scheduling now uses a five-second elapsed-time deadline. These timing fixes
 can affect climb-rate calculation compared with main and should be checked
 on hardware alongside the display. Autothrust thresholds, temperature power
 limiting and PWM mapping retain their existing settings.
@@ -93,8 +94,8 @@ arduino-cli compile --fqbn arduino:avr:leonardo .
 Leonardo verifies the MCU build; select the actual Pro Micro bootloader and
 8 MHz/16 MHz variant when uploading. Tested with SSD1306Ascii from the local
 Arduino installation. Latest build target: `arduino:avr:yun` (the connected ATmega32U4 board on COM4).
-Build result: **23,612 / 28,672 bytes flash (82%)** and
-**813 / 2,560 bytes static RAM (31%)**, leaving 1,747 bytes for stack/runtime.
+Build result: **24,178 / 28,672 bytes flash (84%)** and
+**836 / 2,560 bytes static RAM (32%)**, leaving 1,724 bytes for stack/runtime.
 The layout and symbol/font bitmaps were also inspected as a pixel preview.
 No physical OLED or propulsion hardware was available.
 
@@ -195,3 +196,52 @@ for real sensor/display timing measurements. Its README describes flashing,
 metrics, limitations and the original-vs-gauge display comparison. The companion
 `diagnostics/Messung-speichern.ps1` captures the USB output. This diagnostic
 replaces the controller when flashed; restore the controller firmware afterward.
+
+
+### Non-blocking motor temperature acquisition
+
+`MotorTemperature.h` starts a conversion with `setWaitForConversion(false)`.
+The first conversion starts immediately when live sensors are initialized.
+The first sensor ROM is cached once; subsequent reads use `getTempC(address)`
+instead of repeating discovery through `getTempCByIndex(0)`.
+
+At each live control loop, `poll()` checks completion without waiting. The
+existing externally powered sensor can be polled through OneWire; a
+parasite-powered device instead waits in state until its resolution-dependent
+maximum conversion time has elapsed, avoiding read slots during its power
+phase. This does not add a delay to the CPU. The current measured hardware
+uses external power, 12-bit resolution.
+
+Requests are scheduled at least 5,000 ms apart, from the previous request to
+the next. Since scheduling is serviced once per live loop, the actual spacing
+is about five seconds plus up to one loop duration. Each fresh result is used
+at the next loop that detects completion. The maximum conversion time comes
+from the detected resolution; a still-busy sensor gets a timeout after that
+time plus 250 ms, checked on subsequent loops. The next normal request retries.
+
+Until the first valid temperature is available, the physical motor output is
+held at the existing minimum command and the allowed-power display is zero.
+Invalid/CRC-failed/disconnected/out-of-range results do not replace a valid
+value. On later errors, the last valid temperature is retained and `faulted()`
+reports the error. This is not a complete stale-data/failure strategy: there
+is no separate age-based motor cutoff or displayed fault indicator. If no
+sensor is found at initialization, minimum output remains until restart or a
+new live-mode initialization finds a sensor. Sensor failure behavior should
+be validated separately before propulsion operation.
+
+The existing 638 ms pause is now applied on **every live cycle**, rather than
+replacing every fourth pause with a blocking conversion. It is intentionally
+retained to avoid accelerating the per-loop Autothrust power adjustment.
+Pressure readings and control still run once per live loop; this change does
+not implement a fast scheduler or eliminate the variable OLED update cost.
+Actual read/command bus overhead remains, but the roughly 611 ms conversion
+wait no longer occupies the main code. Thermal power limiting above 80 C,
+warning above 81 C and the USB demo/startup interlock are unchanged.
+
+`diagnostics/MotorTemperatureCheck` contains the same reader with a fake sensor
+bus and controlled time source. Its **21 runtime checks passed on the connected
+ATmega32U4**, including busy/completed reads, 4,999/5,000 ms scheduling, missing
+sensor, invalid read, recovery, timeout, cached address, parasite waiting and
+`millis()` rollover. These are state-machine tests, not measurements of the real
+sensor's new acquisition timing. The independent HardwareTiming benchmark
+remains unchanged as a record of the original blocking baseline.

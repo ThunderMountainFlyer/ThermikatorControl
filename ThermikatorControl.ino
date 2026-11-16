@@ -23,6 +23,7 @@
 #include "OledGaugeDisplay.h"
 #include "DisplayTestValues.h"
 #include "UsbTestGate.h"
+#include "MotorTemperature.h"
 
 
 #define DEBUG false
@@ -40,8 +41,8 @@
 // reference pressure for calculation of absolute altitute
 #define StandardPressure 1013.25
 
-// Delay intervall value empirically determined
-// This value must match the delay caused by measuring the temperature via one-Wire
+// Preserve the empirical control-loop pause independently of the now
+// asynchronous temperature conversion. Display/other work still adds time.
 #define MeasuringDelayIntervall 638
 
 // The analoge input for poti fully depressend (MaxPoti) and idle (MinPoti)
@@ -69,7 +70,6 @@ int PotiValue4 = 0;
 int PotiSetPower = 0;
 int AllowedPower = 0;
 int PowerPWM = 0;   
-int counter = 0;
 unsigned long LastMillis = 0;
 unsigned long CurrentMillis = 0;
 unsigned long intervall = 0;
@@ -101,6 +101,7 @@ OneWire oneWire(ONE_WIRE_BUS);
  
 // Pass our oneWire reference to Dallas Temperature.
 DallasTemperature sensors(&oneWire);
+MotorTemperature motorTemperature(sensors);
 
 
 Servo ServoPower;  // create servo object to control a servo
@@ -121,16 +122,14 @@ bool computerConnected() {
 }
 
 void initializeMeasurements() {
-  sensors.begin();
+  motorTemperature.begin();
+  Temperature = 0; // no demo value may survive into live operation
   bmp.begin(BMP280_ADDRESS_ALT);
-  sensors.requestTemperatures();
-  Temperature = sensors.getTempCByIndex(0);
   Alt1 = bmp.readAltitude(StandardPressure);
   Alt2 = Alt3 = Alt4 = AltAverage = LastAltAverage = Alt1;
   Vario1 = Vario2 = Vario3 = Vario4 = VarioAverage = 0;
   PotiValue1 = PotiValue2 = PotiValue3 = PotiValue4 = 0;
   ReducePower = 0;
-  counter = 0;
   LastMillis = millis();
   measurementsReady = true;
 }
@@ -185,6 +184,7 @@ void loop() {
       displayTestActive = false;
       // Reset sensor history after USB demo; do not differentiate demo duration.
       if (!measurementsReady) initializeMeasurements();
+      if (motorTemperature.poll()) Temperature = motorTemperature.value();
 
     #if DEBUG == true
       Serial.print(F("Temperature = "));
@@ -317,8 +317,11 @@ void loop() {
            
     }
     
+    if (!testMode && !motorTemperature.hasValue()) AllowedPower = 0;
+
     PowerPWM = map(AllowedPower, 0, 100, MinPowerPWM, MaxPowerPWM);  // scale  0 - 100% power setting to use it with PWM Signal of Opto Spin      
-    ServoPower.write(testMode ? MinPowerPWM : PowerPWM); // demo exercises logic, not the physical motor
+    // Keep minimum output until the first real, valid temperature is available.
+    ServoPower.write(testMode || !motorTemperature.hasValue() ? MinPowerPWM : PowerPWM);
     
 
 #if DEBUGINTERVALL == true
@@ -337,21 +340,12 @@ void loop() {
       return;
     }
 
-    /* measuring temperature via 1 Wire takes quit long ... do it only every 4th time */
-    if (counter % 4 == 0 )
-    {
-      sensors.requestTemperatures(); // Send the command to get temperatures
-      Temperature = sensors.getTempCByIndex(0);      
+    // No temperature conversion blocks this loop. Preserve the previous pause
+    // on every live cycle so AT's per-cycle power steps do not speed up.
+    delay(MeasuringDelayIntervall);
 
-    }
-    /* delay is only necessary when 1 wire temperature measuring was not performed */
-    else  delay(MeasuringDelayIntervall);
-    
-    
     #if DEBUG == true
       if (RemainingAkku > 0 ) RemainingAkku--;
     #endif
 
-    // Only the four-cycle temperature schedule needs this counter.
-    counter = (counter + 1) % 4;
 }
