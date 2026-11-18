@@ -8,6 +8,23 @@ http://www.paragliding-kochertal.de/aktuell/emot.html
 Current branch: `NewUIDesing`. Current timing design: **800 ms fixed vario frames**.
 The Waveshare conversion remains on the separate `feat/waveshare-154-epaper` branch.
 
+## Firmware versions
+
+The firmware version is defined in `FirmwareVersion.h`, starting at **2.0.0**.
+At boot the OLED shows the version centered at 4x font scale (116 x 28 pixels
+for `2.0.0`). Once the complete image has been transmitted, one common
+**1,000 ms** window holds the version on screen and detects USB enumeration
+plus VBUS. The window ends before normal gauges/control start. Motor output
+stays at minimum throughout startup. Rendering is incremental; there is no
+additional blocking one-second delay. Longer version strings scale down to fit.
+
+For every subsequent delivered firmware revision, update this version using
+Semantic Versioning: PATCH for fixes, MINOR for compatible features, MAJOR for
+incompatible changes. Build and check the final revision, commit it, then create
+an annotated tag `vMAJOR.MINOR.PATCH` matching `FIRMWARE_VERSION` on that commit.
+Push the branch and its tag. Keep published tags immutable; use a new version
+for later changes. Documentation-only changes do not require a firmware version.
+
 ## Hardware and build
 
 Existing SparkFun Pro Micro / ATmega32U4 wiring:
@@ -33,8 +50,8 @@ DallasTemperature, OneWire, Servo and SSD1306Ascii. Adafruit GFX is not required
 arduino-cli compile --fqbn arduino:avr:yun .
 ```
 
-Normal build: 25,506 / 28,672 bytes flash (88%); 869 / 2,560 bytes static RAM
-(33%), leaving 1,691 bytes for stack/runtime allocations.
+Build size is reported by the compiler; check flash and RAM headroom for each
+release. The ATmega32U4 target provides 28,672 bytes flash and 2,560 bytes RAM.
 
 ## Fixed vario frames
 
@@ -149,8 +166,11 @@ The real acquisition times were subsequently measured in HardwareTiming v2.
 
 ## USB display/logic test
 
-The native USB test mode is selectable only during the first 1,000 ms of sketch
-startup, using USB enumeration plus VBUS. Normal operation is latched until
+The native USB test mode is selectable only during the shared 1,000 ms startup
+window, starting when the version image is fully visible (after OLED
+initialization/transmission), using USB enumeration plus VBUS. Even an early
+USB detection waits for the full window before starting simulated control.
+Normal operation is latched until
 reset, so later USB attachment cannot activate test mode. A detected disconnect
 from test mode latches normal operation too. This is a software interlock,
 not an independent hardware safety mechanism.

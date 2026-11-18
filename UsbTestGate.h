@@ -1,8 +1,9 @@
 #pragma once
 #include <stdint.h>
+#include "FirmwareVersion.h"
 
 enum class UsbRunMode : uint8_t { Detecting, Test, Live };
-constexpr uint32_t UsbDetectionWindowMs = 1000;
+constexpr uint32_t UsbDetectionWindowMs = FirmwareStartupWindowMs;
 
 // Live is a one-way latch. Only a CPU reset can reopen startup detection.
 constexpr UsbRunMode nextUsbRunMode(UsbRunMode mode, uint32_t elapsedMs, bool host) {

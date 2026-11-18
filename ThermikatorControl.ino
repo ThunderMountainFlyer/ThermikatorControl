@@ -47,7 +47,7 @@ Servo ServoPower;
 OledGaugeDisplay display;
 
 UsbRunMode usbRunMode = UsbRunMode::Detecting;
-unsigned long usbDetectionStarted = 0, displayTestStarted = 0;
+unsigned long displayTestStarted = 0;
 bool displayTestActive = false, measurementsReady = false, historyReady = false;
 uint32_t nextControlUs = 0, lastControlUs = 0, lastSampleUs = 0;
 int batteryBeforeTest = 100, RemainingAkku = 100, Temperature = 0;
@@ -173,7 +173,6 @@ void control(bool testMode, uint32_t now) {
 }
 
 void setup() {
-  usbDetectionStarted = millis();
   ServoPower.attach(9); ServoPower.write(MinPowerPWM);
   pinMode(AutothrustPin, INPUT);
   Wire.begin(); Wire.setClock(100000L);
@@ -191,10 +190,15 @@ void loop() {
   // dtr() is non-blocking, unlike Serial_::operator bool() in this AVR core.
   if (!benchActive && Serial.dtr()) { benchActive = true; benchStarted = millis(); }
 #else
-  usbRunMode = nextUsbRunMode(usbRunMode, millis() - usbDetectionStarted, computerConnected());
-  if (usbRunMode == UsbRunMode::Detecting) {
-    display.service(); delay(1); return;
+  // The complete version image and USB detection share one 1-second window.
+  // Keep the motor at minimum until it ends, even if USB is recognized early.
+  if (!display.startupComplete()) {
+    display.service();
+    if (display.startupReady())
+      usbRunMode = nextUsbRunMode(usbRunMode, display.startupElapsedMs(), computerConnected());
+    delay(1); return;
   }
+  usbRunMode = nextUsbRunMode(usbRunMode, display.startupElapsedMs(), computerConnected());
   const bool testMode = usbRunMode == UsbRunMode::Test;
 #endif
   if (testMode) {

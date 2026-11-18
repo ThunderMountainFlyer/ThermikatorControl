@@ -1,5 +1,6 @@
 #include "OledGaugeDisplay.h"
 #include "OledGaugeIcons.h"
+#include "FirmwareVersion.h"
 #include <math.h>
 #include <string.h>
 
@@ -9,7 +10,8 @@ void OledGaugeDisplay::begin(uint8_t address) {
   sending = false;
   blinkingActive = false;
   blinkVisible = false;
-  // Queue the first image; service() paints it in bounded chunks.
+  startup = Startup::Drawing;
+  // Draw the version first, then hold it while USB detection runs.
   update(0, 20, 0, 100, false);
 }
 
@@ -48,12 +50,16 @@ void OledGaugeDisplay::update(float vario, int temperature, int power, int batte
 }
 
 void OledGaugeDisplay::service() {
+  if (startup == Startup::Holding) {
+    if (startupElapsedMs() < FirmwareStartupWindowMs) return;
+    startup = Startup::Complete;
+  }
   if (!sending) {
     const bool gaugesChanged = first || memcmp(shown, wanted, 4) != 0 ||
       shown[5] != wanted[5] || shown[6] != wanted[6];
-    if (!gaugesChanged && shown[4] == wanted[4]) return;
+    if (startup == Startup::Complete && !gaugesChanged && shown[4] == wanted[4]) return;
     memcpy(frame, wanted, sizeof frame); // stable snapshot until fully transmitted
-    pageCount = gaugesChanged ? 8 : 1;
+    pageCount = startup == Startup::Drawing || gaugesChanged ? 8 : 1;
     page = column = 0;
     sending = true;
   }
@@ -66,8 +72,13 @@ void OledGaugeDisplay::service() {
   if (column == 128) {
     column = 0;
     if (++page == pageCount) {
-      memcpy(shown, frame, sizeof shown);
-      first = false;
+      if (startup == Startup::Drawing) {
+        startup = Startup::Holding;
+        startupStarted = millis(); // full version image is now on the OLED
+      } else {
+        memcpy(shown, frame, sizeof shown);
+        first = false;
+      }
       sending = false;
     }
   }
@@ -88,8 +99,8 @@ void OledGaugeDisplay::rect(uint8_t x, uint8_t y, uint8_t width,
         pixel(x + col, row);
 }
 
-void OledGaugeDisplay::text(const char* label, uint8_t x, uint8_t y) {
-  if (y >= (page + 1) * 8 || y + 7 <= page * 8) return;
+void OledGaugeDisplay::text(const char* label, uint8_t x, uint8_t y, uint8_t scale) {
+  if (y >= (page + 1) * 8 || y + 7 * scale <= page * 8) return;
   while (x < 128) {
     const uint8_t c = pgm_read_byte(label++);
     if (!c) break;
@@ -97,9 +108,12 @@ void OledGaugeDisplay::text(const char* label, uint8_t x, uint8_t y) {
     for (uint8_t col = 0; col < 5; ++col) {
       const uint8_t bits = pgm_read_byte(System5x7 + 6 + (c - 32) * 5 + col);
       for (uint8_t row = 0; row < 7; ++row)
-        if (bits & (1 << row)) pixel(x + col, y + row);
+        if (bits & (1 << row)) {
+          if (scale == 1) pixel(x + col, y + row);
+          else rect(x + col * scale, y + row * scale, scale, scale, true);
+        }
     }
-    x += 6;
+    x += 6 * scale;
   }
 }
 
@@ -124,6 +138,13 @@ void OledGaugeDisplay::bar(uint8_t y, uint8_t value, bool bipolar) {
 
 void OledGaugeDisplay::renderPage() {
   memset(pixels, 0, sizeof pixels);
+  if (startup == Startup::Drawing) {
+    constexpr uint8_t width = (sizeof(FIRMWARE_VERSION) - 1) * 6 - 1;
+    static_assert(width <= 128, "Firmware version must fit the OLED");
+    constexpr uint8_t scale = min(4, 128 / width);
+    text(PSTR(FIRMWARE_VERSION), (128 - width * scale) / 2, (64 - 7 * scale) / 2, scale);
+    return;
+  }
   if (frame[4]) text(PSTR("Autothrust"), 34, 0);
   for (uint8_t row = 0; row < 4; ++row) {
     icon(row, 9 + row * 14);
