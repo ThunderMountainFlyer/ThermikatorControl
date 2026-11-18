@@ -1,5 +1,6 @@
 #pragma once
 #include <stdint.h>
+#include "VarioGaugeScale.h"
 
 // Synthetic controller inputs for USB bench testing; no physical motor output.
 struct DisplayTestValues {
@@ -20,9 +21,9 @@ inline DisplayTestValues displayTestValues(uint32_t elapsedMs) {
   const int powerSteps = powerPhase <= 10 ? powerPhase :
     (powerPhase < 20 ? 10 : 30 - powerPhase);
   const uint8_t triangle = step % 40;
-  // Zero -> full climb -> zero -> full sink -> zero, 0.4 m/s per field.
-  const int varioSteps = triangle <= 5 ? triangle :
-    (triangle < 15 ? 5 : (triangle <= 25 ? 20 - int(triangle) :
-    (triangle < 35 ? -5 : int(triangle) - 40)));
-  return {varioSteps * 0.4f, 20 + int(heat), powerSteps * 10, 100 - int(discharge)};
+  // Zero -> +1.4 -> zero -> -0.6 -> zero, with holds at both endpoints.
+  const int varioSteps = triangle <= 7 ? triangle :
+    (triangle < 17 ? 7 : (triangle <= 27 ? 24 - int(triangle) :
+    (triangle < 37 ? -3 : int(triangle) - 40)));
+  return {varioSteps * VarioGaugeStep, 20 + int(heat), powerSteps * 10, 100 - int(discharge)};
 }

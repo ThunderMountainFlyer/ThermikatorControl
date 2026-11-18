@@ -1,6 +1,7 @@
 #include "OledGaugeDisplay.h"
 #include "OledGaugeIcons.h"
 #include "FirmwareVersion.h"
+#include "VarioGaugeScale.h"
 #include <math.h>
 #include <string.h>
 
@@ -35,10 +36,8 @@ void OledGaugeDisplay::update(float vario, int temperature, int power, int batte
   blinkingActive = blinkNeeded;
 
   if (!isfinite(vario)) vario = 0;
-  vario = constrain(vario, -2.0f, 2.0f);
-  const float steps = vario * 2.5f;
   const uint8_t next[7] = {
-    uint8_t(5 + int(steps + (steps >= 0 ? 0.5f : -0.5f))),
+    varioGaugePosition(vario),
     uint8_t((constrain(power, 0, 100) + 5) / 10),
     uint8_t((constrain(temperature, 20, 90) - 20 + 3) / 7),
     uint8_t((constrain(battery, 0, 100) + 5) / 10),
@@ -129,11 +128,13 @@ void OledGaugeDisplay::icon(uint8_t index, uint8_t y) {
 void OledGaugeDisplay::bar(uint8_t y, uint8_t value, bool bipolar) {
   for (uint8_t segment = 0; segment < 10; ++segment) {
     const bool filled = bipolar
-      ? (value >= 5 ? segment >= 5 && segment < value : segment >= value && segment < 5)
+      ? (value >= VarioGaugeZero ? segment >= VarioGaugeZero && segment < value :
+                                  segment >= value && segment < VarioGaugeZero)
       : segment < value;
     rect(18 + segment * 11, y, 8, 10, filled);
   }
-  if (bipolar) rect(73, y - 1, 1, 12, true);
+  // Zero marker in the gap between the three sink and seven climb blocks.
+  if (bipolar) rect(18 + VarioGaugeZero * 11 - 2, y - 1, 1, 12, true);
 }
 
 void OledGaugeDisplay::renderPage() {

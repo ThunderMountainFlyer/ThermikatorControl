@@ -10,11 +10,12 @@ The Waveshare conversion remains on the separate `feat/waveshare-154-epaper` bra
 
 ## Firmware versions
 
-The current firmware version is **2.0.1**, defined in `FirmwareVersion.h`.
+The current firmware version is **2.0.2**, defined in `FirmwareVersion.h`.
 Versioning started at 2.0.0. Version 2.0.1 removes throttle input smoothing and
 raises the Autothrust adjustment rate to 10 percentage points per second.
+Version 2.0.2 changes the displayed vario scale to -0.6..+1.4 m/s in 0.2 m/s blocks.
 At boot the OLED shows the version centered at 4x font scale (116 x 28 pixels
-for `2.0.1`). Once the complete image has been transmitted, one common
+for `2.0.2`). Once the complete image has been transmitted, one common
 **1,000 ms** window holds the version on screen and detects USB enumeration
 plus VBUS. The window ends before normal gauges/control start. Motor output
 stays at minimum throughout startup. Rendering is incremental; there is no
@@ -116,10 +117,14 @@ The old 638 ms blocking pause is removed. Between deadlines:
 - Wire transactions have a 5 ms timeout to bound a stuck bus. The software
   budgets are conservative estimates and must be verified on real hardware.
 
-UI, top to bottom: vario arrows (-2..+2 m/s; 0.4 m/s per field), applied power
+UI, top to bottom: vario arrows (-0.6..+1.4 m/s; 0.2 m/s per field), applied power
 lightning bolt (0..100%), thermometer (20..90 C; 7 C per field, 80 C marker),
 battery (0..100%). Symbols are 13 x 12 pixels and bars 10 pixels high.
 The only text is `Autothrust`, blinking while its real switch is active.
+Vario zero is marked between three sink blocks on the left and seven climb
+blocks on the right. At zero no blocks are filled; values round to the nearest
+block (first block at +/-0.1 m/s) and saturate at the displayed endpoints.
+This display scale leaves the measured vario and Autothrust settings unchanged.
 Battery below 25% and temperature above 81 C flash their whole bar; icons remain
 visible. Blink half-period is 500 ms, serviced by the background loop.
 Battery is still the original **unmeasured 100% placeholder** in live operation.
@@ -183,7 +188,8 @@ not an independent hardware safety mechanism.
 In USB test mode simulated temperature, battery, throttle request and vario feed
 the normal limiting logic. The real Autothrust switch remains active. The
 27.5-second sequence cycles temperature 20..90 C, battery 100..0%, requested
-power up/down, and both climb/sink directions. Background display updates can
+power up/down, and vario 0 -> +1.4 -> 0 -> -0.6 -> 0 m/s in 0.2 m/s steps,
+holding the endpoints so all blocks can be seen. Background display updates can
 show each input step; power limiting itself now follows the same 800 ms control
 cadence as live operation. Physical motor output is always minimum in this mode.
 After leaving demo, sensors/history are reinitialized and the original battery
