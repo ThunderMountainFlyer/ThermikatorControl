@@ -7,12 +7,16 @@ class OledGaugeDisplay {
 public:
   void begin(uint8_t address);
   void update(float vario, int temperature, int power, int battery, bool autothrust);
+  void service(); // at most one 16-byte chunk; caller reserves deadline budget
 
 private:
   SSD1306AsciiWire oled;
   uint8_t page = 0;
   uint8_t pixels[128] = {};
   uint8_t shown[7] = {};
+  uint8_t wanted[7] = {}, frame[7] = {};
+  uint8_t column = 0, pageCount = 0;
+  bool sending = false;
   bool first = true;
   bool blinkingActive = false;
   bool blinkVisible = false;

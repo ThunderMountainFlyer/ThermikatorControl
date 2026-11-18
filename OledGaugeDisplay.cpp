@@ -6,9 +6,10 @@
 void OledGaugeDisplay::begin(uint8_t address) {
   oled.begin(&Adafruit128x64, address);
   first = true;
+  sending = false;
   blinkingActive = false;
   blinkVisible = false;
-  // Paint all eight pages; do not briefly clear before drawing.
+  // Queue the first image; service() paints it in bounded chunks.
   update(0, 20, 0, 100, false);
 }
 
@@ -43,19 +44,32 @@ void OledGaugeDisplay::update(float vario, int temperature, int power, int batte
     uint8_t(!hot || blinkVisible ? 1 : 0),
     uint8_t(!lowBattery || blinkVisible ? 1 : 0)
   };
-  const bool gaugesChanged = first || memcmp(shown, next, 4) != 0 ||
-    shown[5] != next[5] || shown[6] != next[6];
-  if (!gaugesChanged && shown[4] == next[4]) return;
-  memcpy(shown, next, sizeof shown);
-  first = false;
-  // A blink only changes page 0; do not resend the gauge pages for it.
-  const uint8_t pageCount = gaugesChanged ? 8 : 1;
-  for (page = 0; page < pageCount; ++page) {
-    renderPage();
-    oled.setCursor(0, page);
-    for (uint8_t x = 0; x < 127; ++x) oled.ssd1306WriteRamBuf(pixels[x]);
-    // Flush the final Wire transaction before the BMP280 uses the shared bus.
-    oled.ssd1306WriteRam(pixels[127]);
+  memcpy(wanted, next, sizeof wanted);
+}
+
+void OledGaugeDisplay::service() {
+  if (!sending) {
+    const bool gaugesChanged = first || memcmp(shown, wanted, 4) != 0 ||
+      shown[5] != wanted[5] || shown[6] != wanted[6];
+    if (!gaugesChanged && shown[4] == wanted[4]) return;
+    memcpy(frame, wanted, sizeof frame); // stable snapshot until fully transmitted
+    pageCount = gaugesChanged ? 8 : 1;
+    page = column = 0;
+    sending = true;
+  }
+  if (column == 0) renderPage();
+  oled.setCursor(column, page);
+  for (uint8_t x = 0; x < 15; ++x) oled.ssd1306WriteRamBuf(pixels[column + x]);
+  // Always close the Wire transaction before returning to the shared sensor bus.
+  oled.ssd1306WriteRam(pixels[column + 15]);
+  column += 16;
+  if (column == 128) {
+    column = 0;
+    if (++page == pageCount) {
+      memcpy(shown, frame, sizeof shown);
+      first = false;
+      sending = false;
+    }
   }
 }
 
@@ -110,12 +124,12 @@ void OledGaugeDisplay::bar(uint8_t y, uint8_t value, bool bipolar) {
 
 void OledGaugeDisplay::renderPage() {
   memset(pixels, 0, sizeof pixels);
-  if (shown[4]) text(PSTR("Autothrust"), 34, 0);
+  if (frame[4]) text(PSTR("Autothrust"), 34, 0);
   for (uint8_t row = 0; row < 4; ++row) {
     icon(row, 9 + row * 14);
     // Keep symbols visible while the entire warning bar flashes on/off.
-    if ((row != 2 || shown[5]) && (row != 3 || shown[6]))
-      bar(10 + row * 14, shown[row], row == 0);
+    if ((row != 2 || frame[5]) && (row != 3 || frame[6]))
+      bar(10 + row * 14, frame[row], row == 0);
   }
-  if (shown[5]) rect(112, 37, 1, 12, true); // 80 C on the 20..90 C scale
+  if (frame[5]) rect(112, 37, 1, 12, true); // 80 C on the 20..90 C scale
 }
