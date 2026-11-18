@@ -214,3 +214,18 @@ The temperature sensor was absent (`temperature_valid=0`, `temperature_fault=1`)
 so this run is not evidence of regularity during an actual temperature read.
 Repeat with that sensor connected. These short-run min/max observations are
 not guaranteed worst-case bounds or a flight validation.
+
+
+### Follow-up with real motor temperature and full blink stress (18.11.2026)
+
+24 intervals: **799.040 / 799.967 / 800.608 ms** (min/mean/max), no skipped
+frames, no pressure errors. Temperature valid at 16 C, no reader fault.
+Maximum temperature poll 12.556 ms, below the 50 ms reserved budget; maximum
+OLED chunk 6.660 ms, below 30 ms. Control intervals 798.964..801.080 ms;
+result publication 82.800..83.948 ms after pressure start.
+
+The bench display update is now exclusive of the live display update: two
+updates per loop could reset the artificial blink phase when the real switch
+was off. This was fixed in the bench path before the final run; normal display
+logic is unchanged. These are observed short-run timings, not hard worst-case
+bounds or flight validation.

@@ -232,11 +232,12 @@ void loop() {
     if (benchActive) tempPollTimes.add(micros() - tempStart);
 #endif
   }
-  display.update(VarioAverage, Temperature, AllowedPower, RemainingAkku, digitalRead(AutothrustPin) != 0);
 #ifdef VARIO_TIMING_BENCH
   // Stress redraws and warning blink while measuring real pressure/temperature.
   display.update((micros() / VarioFrameUs & 1) ? 2 : -2, 85,
                  (micros() / VarioFrameUs & 1) ? 100 : 0, 20, true);
+#else
+  display.update(VarioAverage, Temperature, AllowedPower, RemainingAkku, digitalRead(AutothrustPin) != 0);
 #endif
   spare = remainingTime(micros(), nextControlUs);
   if (!testMode) spare = min(spare, varioSensor.spareUs());
