@@ -179,7 +179,10 @@ It reports 24 frame intervals (or times out after 30 seconds) after the host
 opens Serial Monitor at 115200 baud. It uses non-blocking `Serial.dtr()`;
 AVR `Serial::operator bool()` must not be used in a timed loop because it adds
 10 ms. Reports include interval min/mean/max, start lateness, display chunk
-costs, temperature poll costs, skipped slots and sensor errors. A missing sensor
+costs, temperature poll costs, skipped slots and sensor errors. It also reports
+`temperature_valid`, `temperature_fault` and the last integer temperature.
+A missing temperature sensor means temperature-read workload was NOT tested.
+A missing pressure sensor
 or fewer than 24 intervals is an incomplete test, even if errors show zero.
 
 Verify interval regularity, no missed slots, completed pressure conversions,
@@ -194,3 +197,20 @@ cycle report omits a 10 ms `Serial` bool check outside the measurement window;
 see the 18.11.2026 log analysis. `diagnostics/Messung-speichern.ps1` captures that
 program's switch-started measurements. Do not mistake old snapshot update
 costs for the new incremental renderer's chunk costs.
+
+
+### First real scheduler check (18.11.2026)
+
+With the BMP280 and OLED connected, redraw/blink stress enabled and physical
+motor output compile-time held at minimum, 24 consecutive intervals measured:
+
+- Vario conversion starts: min 798.964 ms, mean 800.028 ms, max 801.200 ms.
+- Start lateness: max 1.300 ms; no missed frames and no pressure errors.
+- Result publication offset after conversion start: 82.764..84.064 ms.
+- Control intervals: 798.908..800.620 ms.
+- Background display service call: maximum 6.656 ms (30 ms budget).
+
+The temperature sensor was absent (`temperature_valid=0`, `temperature_fault=1`),
+so this run is not evidence of regularity during an actual temperature read.
+Repeat with that sensor connected. These short-run min/max observations are
+not guaranteed worst-case bounds or a flight validation.

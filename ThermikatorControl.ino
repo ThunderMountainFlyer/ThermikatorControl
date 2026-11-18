@@ -65,9 +65,9 @@ struct BenchStats {
     if (value > longest) longest = value;
   }
 };
-BenchStats frameTimes, frameLateness, displayChunks, tempPollTimes;
+BenchStats frameTimes, frameLateness, resultOffsets, controlTimes, displayChunks, tempPollTimes;
 bool benchActive = false, benchFinished = false;
-uint32_t benchStarted = 0, benchLastSample = 0;
+uint32_t benchStarted = 0, benchLastSample = 0, benchLastControl = 0;
 void report(const __FlashStringHelper* label, const BenchStats& s) {
   Serial.print(label); Serial.print(';'); Serial.print(s.count); Serial.print(';');
   Serial.print(s.count ? s.shortest : 0); Serial.print(';');
@@ -76,9 +76,13 @@ void report(const __FlashStringHelper* label, const BenchStats& s) {
 void finishBench() {
   Serial.println(F("# metric;count;min_us;mean_us;max_us"));
   report(F("vario_frame"), frameTimes); report(F("start_lateness"), frameLateness);
+  report(F("result_offset"), resultOffsets); report(F("control_frame"), controlTimes);
   report(F("display_chunk"), displayChunks); report(F("temperature_poll"), tempPollTimes);
   Serial.print(F("missed_frames;")); Serial.println(varioSensor.missedFrames());
   Serial.print(F("sensor_errors;")); Serial.println(varioSensor.errors());
+  Serial.print(F("temperature_valid;")); Serial.println(motorTemperature.hasValue() ? 1 : 0);
+  Serial.print(F("temperature_fault;")); Serial.println(motorTemperature.faulted() ? 1 : 0);
+  Serial.print(F("temperature_C;")); Serial.println(Temperature);
   Serial.println(F("# DONE."));
   benchFinished = true;
 }
@@ -126,11 +130,18 @@ void acceptAltitude() {
     if (benchLastSample) frameTimes.add(sampleTime - benchLastSample);
     benchLastSample = sampleTime;
     frameLateness.add(varioSensor.latenessUs());
+    resultOffsets.add(micros() - sampleTime);
   }
 #endif
 }
 
 void control(bool testMode, uint32_t now) {
+#ifdef VARIO_TIMING_BENCH
+  if (benchActive) {
+    if (benchLastControl) controlTimes.add(now - benchLastControl);
+    benchLastControl = now;
+  }
+#endif
   if (!testMode) {
     for (uint8_t i = 3; i > 0; --i) potiHistory[i] = potiHistory[i-1];
     potiHistory[0] = analogRead(POTI);
