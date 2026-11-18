@@ -37,6 +37,7 @@
 #define MaxMotorTemp 80
 #define MaxClimbRate 0.6f
 #define ClimbHysterese 0.2f
+constexpr float AutothrustRate = 10.0f; // percentage points per second
 
 Adafruit_BMP280 bmp;
 VarioSampler varioSensor(bmp);
@@ -54,7 +55,6 @@ int batteryBeforeTest = 100, RemainingAkku = 100, Temperature = 0;
 int PotiSetPower = 0, AllowedPower = 0, PowerPWM = MinPowerPWM;
 float ReducePower = 0, VarioAverage = 0, previousHeightAverage = 0;
 float heights[4] = {}, velocities[4] = {};
-int potiHistory[4] = {};
 
 #ifdef VARIO_TIMING_BENCH
 struct BenchStats {
@@ -98,7 +98,7 @@ void initializeMeasurements() {
   varioSensor.begin();
   historyReady = false;
   VarioAverage = ReducePower = 0;
-  for (uint8_t i = 0; i < 4; ++i) { potiHistory[i] = 0; velocities[i] = 0; }
+  for (uint8_t i = 0; i < 4; ++i) velocities[i] = 0;
   // Readout is planned 80 ms after the first start at +100 ms. Control
   // follows at +200 ms, then every 800 ms, even if a sensor read fails.
   lastControlUs = micros() - uint32_t(VarioFrameUs);
@@ -143,19 +143,19 @@ void control(bool testMode, uint32_t now) {
   }
 #endif
   if (!testMode) {
-    for (uint8_t i = 3; i > 0; --i) potiHistory[i] = potiHistory[i-1];
-    potiHistory[0] = analogRead(POTI);
-    const int poti = constrain((potiHistory[0] + potiHistory[1] + potiHistory[2] + potiHistory[3]) / 4, MinPoti, MaxPoti);
+    // The motor controller provides its own ramp; use the current input directly.
+    const int rawPoti = analogRead(POTI);
+    const int poti = constrain(rawPoti, MinPoti, MaxPoti);
     PotiSetPower = map(poti, MinPoti, MaxPoti, 0, 100);
   }
   const bool autothrust = digitalRead(AutothrustPin) != 0;
-  // Equivalent to 2 percentage points per 800-ms frame (old text loop ~808 ms).
+  // 10 percentage points per second, equivalent to 8 per 800-ms frame.
   // No dependence on background/UI loop speed. Do not accumulate missed steps.
   const float seconds = min(now - lastControlUs, VarioFrameUs) * 0.000001f;
   lastControlUs = now;
   if (autothrust && (testMode || (varioSensor.valid() && historyReady))) {
-    if (VarioAverage > MaxClimbRate + ClimbHysterese) ReducePower += 2.5f * seconds;
-    if (VarioAverage < MaxClimbRate - ClimbHysterese) ReducePower -= 2.5f * seconds;
+    if (VarioAverage > MaxClimbRate + ClimbHysterese) ReducePower += AutothrustRate * seconds;
+    if (VarioAverage < MaxClimbRate - ClimbHysterese) ReducePower -= AutothrustRate * seconds;
     ReducePower = constrain(ReducePower, 0.0f, 100.0f);
   }
   AllowedPower = max(0, PotiSetPower - (autothrust ? int(ReducePower + 0.5f) : 0));

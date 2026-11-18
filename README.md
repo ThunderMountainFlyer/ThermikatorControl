@@ -10,9 +10,11 @@ The Waveshare conversion remains on the separate `feat/waveshare-154-epaper` bra
 
 ## Firmware versions
 
-The firmware version is defined in `FirmwareVersion.h`, starting at **2.0.0**.
+The current firmware version is **2.0.1**, defined in `FirmwareVersion.h`.
+Versioning started at 2.0.0. Version 2.0.1 removes throttle input smoothing and
+raises the Autothrust adjustment rate to 10 percentage points per second.
 At boot the OLED shows the version centered at 4x font scale (116 x 28 pixels
-for `2.0.0`). Once the complete image has been transmitted, one common
+for `2.0.1`). Once the complete image has been transmitted, one common
 **1,000 ms** window holds the version on screen and detects USB enumeration
 plus VBUS. The window ends before normal gauges/control start. Motor output
 stays at minimum throughout startup. Rendering is incremental; there is no
@@ -125,13 +127,16 @@ Battery is still the original **unmeasured 100% placeholder** in live operation.
 ## Control behavior
 
 The calibrated potentiometer range remains 370..980, mapped to 0..100% request.
-Its four-sample smoothing runs at the 800 ms control cadence. Motor commands
-remain Servo.write(50)..Servo.write(140) on pin 9.
+Each 800 ms control step uses the current analog reading directly, without a
+moving average. A throttle change therefore reaches the next control step
+(up to about 800 ms later); the motor controller applies its own configured
+acceleration/deceleration ramp. Motor commands remain Servo.write(50)..
+Servo.write(140) on pin 9.
 
 Autothrust targets 0.6 m/s with a 0.2 m/s band: above 0.8 m/s it increases
-reduction; below 0.4 m/s it decreases reduction. Adjustment is now
-**2.5 percentage points per second**, equivalent to two points per 800 ms,
-close to the original measured text-loop cadence. Elapsed time is used and
+reduction; below 0.4 m/s it decreases reduction. Adjustment is
+**10 percentage points per second**, equivalent to eight points per 800 ms,
+in both directions. Elapsed time is used and
 capped at one frame; missed iterations are not accumulated into a large power
 jump. This is intentionally different from applying two points on every fast
 background-loop iteration. It needs a hardware/control behavior check before
