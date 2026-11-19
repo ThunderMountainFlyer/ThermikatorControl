@@ -16,352 +16,246 @@
  ***************************************************************************/
 
 #include <Wire.h>
-#include <Adafruit_Sensor.h>
 #include <Adafruit_BMP280.h>
 #include <DallasTemperature.h>
 #include <Servo.h>
-#include "SSD1306Ascii.h"
-#include "SSD1306AsciiWire.h"
+#include "OledGaugeDisplay.h"
+#include "DisplayTestValues.h"
+#include "UsbTestGate.h"
+#include "MotorTemperature.h"
+#include "VarioSampler.h"
 
-
-#define DEBUG false
-#define DEBUGINTERVALL true
-
-// 0X3C+SA0 - 0x3C or 0x3D
+// Existing Pro Micro/ATmega32U4 wiring and calibrated control settings.
 #define I2C_ADDRESS 0x3C
-
-// Poti is connected to A0 Pin 18
 #define POTI 18
-
-// Data wire is plugged into pin 8 on the Arduino
 #define ONE_WIRE_BUS 8
-
-// reference pressure for calculation of absolute altitute
-#define StandardPressure 1013.25
-
-// Delay intervall value empirically determined
-// This value must match the delay caused by measuring the temperature via one-Wire
-#define MeasuringDelayIntervall 638
-
-// The analoge input for poti fully depressend (MaxPoti) and idle (MinPoti)
-// Those values are specific for the used poti and mechanic 
-// lower and higher values might be possible, but this is the defined limit 
 #define MaxPoti 980
 #define MinPoti 370
-
-// Absolute min. and max. values for PWM modulation that Opto Spin 180 will accept
 #define MinPowerPWM 50
 #define MaxPowerPWM 140
-
 #define AutothrustPin 10
-
 #define MaxMotorTemp 80
+#define MaxClimbRate 0.6f
+#define ClimbHysterese 0.2f
+constexpr float AutothrustRate = 10.0f; // percentage points per second
 
-#define MaxClimbRate 0.6
-#define ClimbHysterese 0.2
-
-int PotiValue = 0;
-int PotiValue1 = 0;
-int PotiValue2 = 0;
-int PotiValue3 = 0;
-int PotiValue4 = 0;
-int PotiSetPower = 0;
-int AllowedPower = 0;
-int LastAllowedPower = 0;
-int PowerPWM = 0;   
-int counter = 0;
-int LastMillis = 0;
-int CurrentMillis = 0;
-int intervall = 0;
-int Autothrust = 0;
-int MaxAllowedPower = 0;
-int ReducePower = 0;
-int OverTemp = 0;
-int RemainingAkku = 100;
-int LastRemainingAkku = 100;
-
-int Temperature = 0;
-int LastTemperature = 0;
-
-float Alt1 = 0;
-float Alt2 = 0;
-float Alt3 = 0;
-float Alt4 = 0;
-float AltAverage = 0;
-float LastAltAverage = 0;
-float Vario1 = 0;
-float Vario2 = 0;
-float Vario3 = 0;
-float Vario4 = 0;
-float VarioAverage = 0;
-
-Adafruit_BMP280 bmp; // I2C
-
-char Line1[12];
-char Line2[12];
-char Line3[12];
-char Line4[12];
-
-
-// Setup a oneWire instance to communicate with any OneWire devices 
-// (not just Maxim/Dallas temperature ICs)
+Adafruit_BMP280 bmp;
+VarioSampler varioSensor(bmp);
 OneWire oneWire(ONE_WIRE_BUS);
- 
-// Pass our oneWire reference to Dallas Temperature.
 DallasTemperature sensors(&oneWire);
+MotorTemperature motorTemperature(sensors);
+Servo ServoPower;
+OledGaugeDisplay display;
 
+UsbRunMode usbRunMode = UsbRunMode::Detecting;
+unsigned long displayTestStarted = 0;
+bool displayTestActive = false, measurementsReady = false, historyReady = false;
+uint32_t nextControlUs = 0, lastControlUs = 0, lastSampleUs = 0;
+int batteryBeforeTest = 100, RemainingAkku = 100, Temperature = 0;
+int PotiSetPower = 0, AllowedPower = 0, PowerPWM = MinPowerPWM;
+float ReducePower = 0, VarioAverage = 0, previousHeightAverage = 0;
+float heights[4] = {}, velocities[4] = {};
 
-Servo ServoPower;  // create servo object to control a servo
-
-static char outstr[15];
-
-SSD1306AsciiWire oled;
-  
-void setup() {
-
-  #if DEBUG == true
-    Serial.begin(9600);
-    Serial.println("Thermikator Control");
-  #endif
-  
-  Wire.begin();
-  Wire.setClock(100000L);
-
-  oled.begin(&Adafruit128x64, I2C_ADDRESS);
-
-  oled.setFont(fixed_bold10x15); // 12 characters per line !
-  oled.clear();
-  oled.println("Thermikator");
-  oled.println("  Control");
-
-  // Start up the library
-  sensors.begin();
- 
-  bmp.begin(BMP280_ADDRESS_ALT);
-
-  #if DEBUG == true
-    if (!bmp.begin(BMP280_ADDRESS_ALT)) {  
-    Serial.println("no valid BME280");
+#ifdef VARIO_TIMING_BENCH
+struct BenchStats {
+  uint32_t count = 0, shortest = UINT32_MAX, longest = 0, sum = 0;
+  void add(uint32_t value) {
+    ++count; sum += value;
+    if (value < shortest) shortest = value;
+    if (value > longest) longest = value;
   }
-  #endif
-
-  sensors.requestTemperatures(); // Send the command to get temperatures
-  Temperature = sensors.getTempCByIndex(0);      
-
-  Alt1 = bmp.readAltitude(StandardPressure);
-  Alt2 = Alt1;
-  Alt3 = Alt1;
-  Alt4 = Alt1;
-  LastAltAverage = Alt1;
-  LastMillis = millis(); 
-  
-  ServoPower.attach(9);  // attaches the servo on pin 9 to the servo object
-  ServoPower.write(MinPowerPWM);
-
-  pinMode(AutothrustPin, INPUT);
-
+};
+BenchStats frameTimes, frameLateness, resultOffsets, controlTimes, displayChunks, tempPollTimes;
+bool benchActive = false, benchFinished = false;
+uint32_t benchStarted = 0, benchLastSample = 0, benchLastControl = 0;
+void report(const __FlashStringHelper* label, const BenchStats& s) {
+  Serial.print(label); Serial.print(';'); Serial.print(s.count); Serial.print(';');
+  Serial.print(s.count ? s.shortest : 0); Serial.print(';');
+  Serial.print(s.count ? s.sum / s.count : 0); Serial.print(';'); Serial.println(s.longest);
 }
-  
-void loop() {
-    
-    #if DEBUG == true
-      Serial.print(F("Temperature = "));
-      Serial.print(bmp.readTemperature());
-      Serial.println(" *C");
-    
-      Serial.print(F("Pressure = "));
-      Serial.print(bmp.readPressure());
-      Serial.println(" hPa");
-    
-      Serial.print(F("Altitude = "));
-      Serial.print(bmp.readAltitude(StandardPressure));
-      Serial.println(" m MSL");
-      
-      Serial.print(F("Engine temp = "));
-      Serial.print(Temperature);
-      Serial.println(" *C");
-
-    #endif
-
-    // clear the display only once in the loop, because this takes 60 ms and causes flicker
-    if (counter == 0 )
-      oled.clear();
-      
-    LastTemperature   = Temperature;
-    LastAllowedPower  = AllowedPower;
-    LastRemainingAkku = RemainingAkku;
-    
-    oled.setCursor(0,0);
-    oled.println(Line1);
-    oled.println(Line2);
-    oled.println(Line3);
-    oled.println(Line4);
-        
-    Alt4 = Alt3;
-    Alt3 = Alt2;
-    Alt2 = Alt1;
-        
-    Alt1 = bmp.readAltitude(StandardPressure);
-    LastAltAverage = AltAverage;
-    AltAverage = (Alt1 + Alt2 + Alt3 +Alt4) / 4;
-    
-    // read the value from the sensor
-    PotiValue4  = PotiValue3;
-    PotiValue3  = PotiValue2;
-    PotiValue2  = PotiValue1;
-    PotiValue1  = analogRead(POTI);  
-
-    PotiValue = (PotiValue1 + PotiValue2 + PotiValue3 + PotiValue4) / 4;
-
-    // read the setting of the Autothrust switch
-      
-    Autothrust = digitalRead(AutothrustPin); 
-
-    #if DEBUG == true
-      Serial.print(F("Poti value = "));
-      Serial.print(PotiValue);
-      Serial.println();
-    #endif
-
-    // full power  -> poti fully depressed -> value 1050 or greater
-    // power off   -> poti not activly depresses -> value 350 or less
-
-    // we just want do deal with values between defined MinPoti and MaxPoti   
-    
-    if (PotiValue > MaxPoti) 
-      PotiValue = MaxPoti;
-    if (PotiValue < MinPoti) 
-      PotiValue = MinPoti;
-        
-    // map the min/max of the poti to 0-100%
-    
-    PotiSetPower = map(PotiValue, MinPoti, MaxPoti, 0, 100);
-    
-    CurrentMillis = millis();
-    intervall = CurrentMillis - LastMillis;
-    LastMillis = CurrentMillis;
-
-    // overwrite the oldest clim/sink rate value by shifting them
-    
-    Vario4 = Vario3;
-    Vario3 = Vario2;
-    Vario2 = Vario1;    
- 
-    // calculate the current climb/sink rate from altitude gain in current intervall
-    
-    Vario1 = (AltAverage - LastAltAverage) * (1000/intervall);
-    
-    // calculate average climb/sink rate
-
-    VarioAverage = (Vario1 + Vario2 + Vario3 + Vario4) / 4;
-    if (VarioAverage > 9.9)
-      VarioAverage = 9.9;
-    if (VarioAverage < 0)
-      strcpy(Line1, "Vario -");
-    else
-      strcpy(Line1, "Vario  ");
-      
-    dtostrf(abs(VarioAverage), 2, 1, &Line1[strlen(Line1)]);    
-
- 
-    // before AT or overtemp calculations, allowed is what is set
-    AllowedPower = PotiSetPower;
-     
-    if (Autothrust) 
-    {
-      if (VarioAverage > MaxClimbRate + ClimbHysterese)
-      {
-        if (ReducePower < 99) {
-          ReducePower = ReducePower + 2;
-          }
-        }
-      
-      if (VarioAverage < MaxClimbRate - ClimbHysterese)
-      {
-       if (ReducePower > 1) {
-          ReducePower = ReducePower - 2;
-          }
-      }
-      
-      AllowedPower = PotiSetPower - ReducePower;
-      if (AllowedPower < 0 ) {
-        AllowedPower = 0;
-      }
-      
-    }
-
-    // if MaxMotorTemp is exceeded, power setting is reduced
-    if (Temperature > MaxMotorTemp)
-    { 
-      // every degree over the limit reduces power by 10% absolute power
-
-      OverTemp = Temperature - MaxMotorTemp;
-      if (OverTemp < 0)
-      { 
-        // surpress negative OverTemp
-        OverTemp = 0;
-      }
-       
-      MaxAllowedPower = 100 - (OverTemp * 10);
-      if (MaxAllowedPower < 20)
-      {
-        // 80% reduction is the maximum - leave 20% for motor ventilation
-        MaxAllowedPower = 20;  
-      }
-    
-      AllowedPower = min(AllowedPower,MaxAllowedPower);
-           
-    }
-    
-    PowerPWM = map(AllowedPower, 0, 100, MinPowerPWM, MaxPowerPWM);  // scale  0 - 100% power setting to use it with PWM Signal of Opto Spin      
-    ServoPower.write(PowerPWM);                                      // modulate PWM according to the scaled value
-    
-
-#if DEBUGINTERVALL == true
-    Serial.print(F("Intervall = "));
-    Serial.print(intervall);
-    Serial.println(" ms");
-    Serial.println("");
-    
+void finishBench() {
+  Serial.println(F("# metric;count;min_us;mean_us;max_us"));
+  report(F("vario_frame"), frameTimes); report(F("start_lateness"), frameLateness);
+  report(F("result_offset"), resultOffsets); report(F("control_frame"), controlTimes);
+  report(F("display_chunk"), displayChunks); report(F("temperature_poll"), tempPollTimes);
+  Serial.print(F("missed_frames;")); Serial.println(varioSensor.missedFrames());
+  Serial.print(F("sensor_errors;")); Serial.println(varioSensor.errors());
+  Serial.print(F("temperature_valid;")); Serial.println(motorTemperature.hasValue() ? 1 : 0);
+  Serial.print(F("temperature_fault;")); Serial.println(motorTemperature.faulted() ? 1 : 0);
+  Serial.print(F("temperature_C;")); Serial.println(Temperature);
+  Serial.println(F("# DONE."));
+  benchFinished = true;
+}
 #endif
-      
-    sprintf(Line2, "Temp   %d", Temperature);
-    sprintf(Line3, "Power  %d", AllowedPower);
-    sprintf(Line4, "Akku   %d", RemainingAkku);
 
-    /* measuring temperature via 1 Wire takes quit long ... do it only every 4th time */
-    if (counter % 4 == 0 )
-    {
-      sensors.requestTemperatures(); // Send the command to get temperatures
-      Temperature = sensors.getTempCByIndex(0);      
-
-    }
-    /* delay is only necessary when 1 wire temperature measuring was not performed */
-    else  delay(MeasuringDelayIntervall);
-    
-    
-    #if DEBUG == true
-      if (RemainingAkku > 0 ) RemainingAkku--;
-    #endif
-
-    clearOld(LastTemperature,Temperature,1);
-    
-    clearOld(LastAllowedPower,AllowedPower,2);
-
-    clearOld(LastRemainingAkku,RemainingAkku,3);
-   
-    counter = counter + 1;   
+bool computerConnected() {
+  return USBDevice.configured() && (USBSTA & _BV(VBUS));
 }
 
-void clearOld(int OldValue, int NewValue,int LineNr)
-{
-    if (NewValue != OldValue )
-    {
-      if (NewValue < 10)  oled.setCursor(87,LineNr * 2);
-      else
-        if (NewValue < 100 )  oled.setCursor(98,LineNr * 2);
-      
-      oled.println("   ");
-    }  
-  
+void initializeMeasurements() {
+  motorTemperature.begin();
+  Temperature = 0;
+  varioSensor.begin();
+  historyReady = false;
+  VarioAverage = ReducePower = 0;
+  for (uint8_t i = 0; i < 4; ++i) velocities[i] = 0;
+  // Readout is planned 80 ms after the first start at +100 ms. Control
+  // follows at +200 ms, then every 800 ms, even if a sensor read fails.
+  lastControlUs = micros() - uint32_t(VarioFrameUs);
+  nextControlUs = micros() + 200000UL;
+  measurementsReady = true;
+}
+
+void acceptAltitude() {
+  const float altitude = varioSensor.altitude();
+  const uint32_t sampleTime = varioSensor.sampleTimeUs();
+  const uint32_t elapsed = sampleTime - lastSampleUs;
+  if (!historyReady || elapsed > VarioFrameUs + VarioFrameUs / 2) {
+    for (uint8_t i = 0; i < 4; ++i) { heights[i] = altitude; velocities[i] = 0; }
+    previousHeightAverage = altitude;
+    VarioAverage = 0;
+    historyReady = true;
+  } else {
+    for (uint8_t i = 3; i > 0; --i) { heights[i] = heights[i-1]; velocities[i] = velocities[i-1]; }
+    heights[0] = altitude;
+    const float heightAverage = (heights[0] + heights[1] + heights[2] + heights[3]) * 0.25f;
+    velocities[0] = elapsed ? (heightAverage - previousHeightAverage) * (1000000.0f / elapsed) : 0;
+    previousHeightAverage = heightAverage;
+    VarioAverage = (velocities[0] + velocities[1] + velocities[2] + velocities[3]) * 0.25f;
+    VarioAverage = constrain(VarioAverage, -9.9f, 9.9f);
+  }
+  lastSampleUs = sampleTime;
+#ifdef VARIO_TIMING_BENCH
+  if (benchActive) {
+    if (benchLastSample) frameTimes.add(sampleTime - benchLastSample);
+    benchLastSample = sampleTime;
+    frameLateness.add(varioSensor.latenessUs());
+    resultOffsets.add(micros() - sampleTime);
+  }
+#endif
+}
+
+void control(bool testMode, uint32_t now) {
+#ifdef VARIO_TIMING_BENCH
+  if (benchActive) {
+    if (benchLastControl) controlTimes.add(now - benchLastControl);
+    benchLastControl = now;
+  }
+#endif
+  if (!testMode) {
+    // The motor controller provides its own ramp; use the current input directly.
+    const int rawPoti = analogRead(POTI);
+    const int poti = constrain(rawPoti, MinPoti, MaxPoti);
+    PotiSetPower = map(poti, MinPoti, MaxPoti, 0, 100);
+  }
+  const bool autothrust = digitalRead(AutothrustPin) != 0;
+  // 10 percentage points per second, equivalent to 8 per 800-ms frame.
+  // No dependence on background/UI loop speed. Do not accumulate missed steps.
+  const float seconds = min(now - lastControlUs, VarioFrameUs) * 0.000001f;
+  lastControlUs = now;
+  if (autothrust && (testMode || (varioSensor.valid() && historyReady))) {
+    if (VarioAverage > MaxClimbRate + ClimbHysterese) ReducePower += AutothrustRate * seconds;
+    if (VarioAverage < MaxClimbRate - ClimbHysterese) ReducePower -= AutothrustRate * seconds;
+    ReducePower = constrain(ReducePower, 0.0f, 100.0f);
+  }
+  AllowedPower = max(0, PotiSetPower - (autothrust ? int(ReducePower + 0.5f) : 0));
+  if (Temperature > MaxMotorTemp) {
+    const int limit = max(20, 100 - (Temperature - MaxMotorTemp) * 10);
+    AllowedPower = min(AllowedPower, limit);
+  }
+  if (!testMode && !motorTemperature.hasValue()) AllowedPower = 0;
+  PowerPWM = map(AllowedPower, 0, 100, MinPowerPWM, MaxPowerPWM);
+#ifdef VARIO_TIMING_BENCH
+  ServoPower.write(MinPowerPWM); // bench firmware can NEVER drive requested power
+#else
+  ServoPower.write(testMode || !motorTemperature.hasValue() ? MinPowerPWM : PowerPWM);
+#endif
+}
+
+void setup() {
+  ServoPower.attach(9); ServoPower.write(MinPowerPWM);
+  pinMode(AutothrustPin, INPUT);
+  Wire.begin(); Wire.setClock(100000L);
+  Wire.setWireTimeout(5000, true);
+  display.begin(I2C_ADDRESS);
+#ifdef VARIO_TIMING_BENCH
+  Serial.begin(115200);
+#endif
+}
+
+void loop() {
+#ifdef VARIO_TIMING_BENCH
+  const bool testMode = false; // real sensors, but motor is compile-time inhibited
+  if (benchFinished) { delay(1); return; }
+  // dtr() is non-blocking, unlike Serial_::operator bool() in this AVR core.
+  if (!benchActive && Serial.dtr()) { benchActive = true; benchStarted = millis(); }
+#else
+  // The complete version image and USB detection share one 1-second window.
+  // Keep the motor at minimum until it ends, even if USB is recognized early.
+  if (!display.startupComplete()) {
+    display.service();
+    if (display.startupReady())
+      usbRunMode = nextUsbRunMode(usbRunMode, display.startupElapsedMs(), computerConnected());
+    delay(1); return;
+  }
+  usbRunMode = nextUsbRunMode(usbRunMode, display.startupElapsedMs(), computerConnected());
+  const bool testMode = usbRunMode == UsbRunMode::Test;
+#endif
+  if (testMode) {
+    if (!displayTestActive) {
+      displayTestStarted = millis(); batteryBeforeTest = RemainingAkku;
+      ReducePower = 0; displayTestActive = true;
+      nextControlUs = micros(); lastControlUs = nextControlUs - VarioFrameUs;
+    }
+    measurementsReady = false;
+    const DisplayTestValues test = displayTestValues(millis() - displayTestStarted);
+    Temperature = test.temperature; RemainingAkku = test.battery;
+    PotiSetPower = test.power; VarioAverage = test.vario;
+  } else {
+    if (displayTestActive) RemainingAkku = batteryBeforeTest;
+    displayTestActive = false;
+    if (!measurementsReady) initializeMeasurements();
+    // Highest priority: trigger/read pressure on phase-locked deadlines.
+    if (varioSensor.poll()) acceptAltitude();
+    if (!varioSensor.valid()) historyReady = false;
+  }
+  uint32_t now = micros();
+  if (deadlineReached(now, nextControlUs)) {
+    nextControlUs = followingFrame(nextControlUs, now);
+    control(testMode, now);
+  }
+  uint32_t spare = remainingTime(micros(), nextControlUs);
+  if (!testMode) spare = min(spare, varioSensor.spareUs());
+  // Cached OneWire reads measured ~12.5 ms: reserve 50 ms, including margin.
+  if (!testMode && spare >= 50000UL) {
+#ifdef VARIO_TIMING_BENCH
+    const uint32_t tempStart = micros();
+#endif
+    if (motorTemperature.poll()) Temperature = motorTemperature.value();
+#ifdef VARIO_TIMING_BENCH
+    if (benchActive) tempPollTimes.add(micros() - tempStart);
+#endif
+  }
+#ifdef VARIO_TIMING_BENCH
+  // Stress redraws and warning blink while measuring real pressure/temperature.
+  display.update((micros() / VarioFrameUs & 1) ? 2 : -2, 85,
+                 (micros() / VarioFrameUs & 1) ? 100 : 0, 20, true);
+#else
+  display.update(VarioAverage, Temperature, AllowedPower, RemainingAkku, digitalRead(AutothrustPin) != 0);
+#endif
+  spare = remainingTime(micros(), nextControlUs);
+  if (!testMode) spare = min(spare, varioSensor.spareUs());
+  if (spare >= 30000UL) {
+#ifdef VARIO_TIMING_BENCH
+    const uint32_t chunkStart = micros();
+#endif
+    display.service();
+#ifdef VARIO_TIMING_BENCH
+    if (benchActive) displayChunks.add(micros() - chunkStart);
+#endif
+  }
+#ifdef VARIO_TIMING_BENCH
+  if (benchActive && (frameTimes.count >= 24 || millis() - benchStarted > 30000UL)) finishBench();
+#endif
+  delay(1); // cooperative idle, not the old 638-ms blocking pause
 }
