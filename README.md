@@ -5,16 +5,12 @@ barometric Autothrust limiting, motor-temperature limiting and an OLED UI.
 The Thermikator was designed and first built by Markus Dörr:
 http://www.paragliding-kochertal.de/aktuell/emot.html
 
-Current branch: `main` (OLED design merged from `NewUIDesing`).
-Current timing design: **800 ms fixed vario frames**.
-The Waveshare conversion remains on the separate `feat/waveshare-154-epaper` branch.
+The firmware on `main` uses the existing SSD1306 OLED and
+**800 ms fixed vario frames**.
 
 ## Firmware versions
 
 The current firmware version is **2.0.2**, defined in `FirmwareVersion.h`.
-Versioning started at 2.0.0. Version 2.0.1 removes throttle input smoothing and
-raises the Autothrust adjustment rate to 10 percentage points per second.
-Version 2.0.2 changes the displayed vario scale to -0.6..+1.4 m/s in 0.2 m/s blocks.
 At boot the OLED shows the version centered at 4x font scale (116 x 28 pixels
 for `2.0.2`). Once the complete image has been transmitted, one common
 **1,000 ms** window holds the version on screen and detects USB enumeration
@@ -59,15 +55,11 @@ release. The ATmega32U4 target provides 28,672 bytes flash and 2,560 bytes RAM.
 
 ## Fixed vario frames
 
-The former loop combined sensor reads, display transfers and a 638 ms pause.
-The old hardware benchmarks measured about 641 ms per static-display cycle and
-789 ms per changing-display cycle. The new scheduler uses phase-locked
-**800,000 us** pressure-conversion starts, independent of screen changes.
-800 ms was chosen near the earlier full-text/OLED timing; this is a stable,
-conservative cadence rather than a new 10 Hz vario algorithm.
+The scheduler uses phase-locked **800,000 us** pressure-conversion starts,
+independent of screen changes. Timing constants are in [FrameTiming.h](FrameTiming.h).
 
 `VarioSampler.h` explicitly selects BMP280 forced mode, temperature x16,
-pressure x16, internal IIR off, preserving the previous oversampling defaults.
+pressure x16 and internal IIR off.
 Each frame starts a fresh conversion. The readout slot is planned at +80 ms
 based on the approximately 65.8 ms conversion measured on this hardware.
 The status register must confirm completion. A still-busy conversion is retried
@@ -105,7 +97,7 @@ manual throttle and temperature limiting do not depend on a successful vario
 read. Invalid vario freezes the existing Autothrust reduction; it does not
 invent climb or remove the pilot's requested throttle.
 
-The old 638 ms blocking pause is removed. Between deadlines:
+Between deadlines:
 
 - OneWire work is allowed only with at least 50 ms spare time. Cached temperature
   reads measured about 12.5 ms; the margin includes command/poll overhead.
@@ -121,7 +113,8 @@ The old 638 ms blocking pause is removed. Between deadlines:
 UI, top to bottom: vario arrows (-0.6..+1.4 m/s; 0.2 m/s per field), applied power
 lightning bolt (0..100%), thermometer (20..90 C; 7 C per field, 80 C marker),
 battery (0..100%). Symbols are 13 x 12 pixels and bars 10 pixels high.
-The only text is `Autothrust`, blinking while its real switch is active.
+After the startup version screen, the only text is `Autothrust`, blinking
+while its real switch is active.
 Vario zero is marked between three sink blocks on the left and seven climb
 blocks on the right. At zero no blocks are filled; values round to the nearest
 block (first block at +/-0.1 m/s) and saturate at the displayed endpoints.
@@ -142,18 +135,19 @@ Servo.write(140) on pin 9.
 Autothrust targets 0.6 m/s with a 0.2 m/s band: above 0.8 m/s it increases
 reduction; below 0.4 m/s it decreases reduction. Adjustment is
 **10 percentage points per second**, equivalent to eight points per 800 ms,
-in both directions. Elapsed time is used and
-capped at one frame; missed iterations are not accumulated into a large power
-jump. This is intentionally different from applying two points on every fast
-background-loop iteration. It needs a hardware/control behavior check before
-propulsion use. An existing reduction is retained while Autothrust is switched
-off, as before.
+in both directions. Elapsed time is used and capped at one frame; missed iterations are not accumulated into a large power
+jump. While Autothrust is off, its stored reduction is retained but not applied;
+switching it off can therefore immediately restore the pilot's requested power,
+subject to temperature limiting. Firmware has no common output ramp; the motor
+controller applies its configured ramp.
 
 Temperature above 80 C reduces the maximum power by ten percentage points per
 degree, with a floor of 20% maximum power at 88 C and above. Pilot/Autothrust
 requests below that cap remain effective. Until the first valid motor
 temperature exists, permitted power is zero and the physical motor command is
-the existing minimum. This is not a complete sensor-failure strategy.
+the existing minimum. The control/UI use whole degrees Celsius, truncating the
+temperature reader's floating-point value. There is no separate sensor-fault
+indicator on the OLED.
 
 ## Asynchronous motor temperature
 
@@ -170,20 +164,15 @@ later failures retain the last valid value and expose `faulted()`. There is no
 separate stale-temperature cutoff or displayed fault indicator. A sensor missing
 at initialization leaves output at minimum until restart/reinitialization.
 
-The existing `diagnostics/MotorTemperatureCheck` ran 21 state-machine checks
-on the ATmega32U4 using the production reader with a simulated bus/clock. These
-covered timing, invalid values, missing sensor, recovery and timer rollover.
-The real acquisition times were subsequently measured in HardwareTiming v2.
-
 ## USB display/logic test
 
 The native USB test mode is selectable only during the shared 1,000 ms startup
 window, starting when the version image is fully visible (after OLED
 initialization/transmission), using USB enumeration plus VBUS. Even an early
 USB detection waits for the full window before starting simulated control.
-Normal operation is latched until
-reset, so later USB attachment cannot activate test mode. A detected disconnect
-from test mode latches normal operation too. This is a software interlock,
+Normal operation is latched until reset, so later USB attachment cannot
+activate test mode. A detected disconnect from test mode latches normal
+operation too. This is a software interlock,
 not an independent hardware safety mechanism.
 
 In USB test mode simulated temperature, battery, throttle request and vario feed
@@ -195,6 +184,27 @@ show each input step; power limiting itself now follows the same 800 ms control
 cadence as live operation. Physical motor output is always minimum in this mode.
 After leaving demo, sensors/history are reinitialized and the original battery
 placeholder is restored.
+
+## Diagnostic programs
+
+| Program | Purpose and start condition |
+| --- | --- |
+| `VARIO_TIMING_BENCH` build of the root sketch | Current scheduler with real sensors and display stress; starts recording when the serial port opens |
+| [HardwareTiming](diagnostics/HardwareTiming/README.md) | Standalone component/conversion measurements with an older synchronous OLED snapshot; starts on Autothrust OFF/ON with serial open |
+| [MotorTemperatureCheck](diagnostics/MotorTemperatureCheck/MotorTemperatureCheck.ino) | 21 temperature-reader checks using a simulated bus/clock; starts when the serial port opens |
+
+The two standalone sketches replace the controller firmware when uploaded.
+They hold pin 9 at the minimum motor command. After testing, upload the root
+controller sketch again. HardwareTiming's detailed instructions and capture
+script are documented in its linked README. The temperature self-test needs
+no sensor; its local reader is a copy of the production `MotorTemperature.h`.
+Its serial output ends with `CHECKS=21`, `FAILURES=0`, `# DONE.` on success.
+
+Build the self-test from the repository root:
+
+```sh
+arduino-cli compile --fqbn arduino:avr:yun diagnostics/MotorTemperatureCheck
+```
 
 ## Hardware timing verification
 
@@ -223,41 +233,17 @@ with the real wiring, displays and sensors. This benchmark is not a flight
 certification; verify PWM behavior and all limiting functions with propulsion
 power disconnected before operation.
 
-The older independent `diagnostics/HardwareTiming` and its bundled OLED/reader
-snapshots intentionally remain on the previous code for comparison. Its v2
-cycle report omits a 10 ms `Serial` bool check outside the measurement window;
-see the 18.11.2026 log analysis. `diagnostics/Messung-speichern.ps1` captures that
-program's switch-started measurements. Do not mistake old snapshot update
-costs for the new incremental renderer's chunk costs.
+### Recorded scheduler measurement (18.11.2026)
 
+The run at commit `13c8676` used the BMP280, OLED and motor-temperature sensor,
+with artificial redraw/blink stress and motor output held at minimum.
+These are recorded measurements of that revision, not a new test of 2.0.2:
 
-### First real scheduler check (18.11.2026)
+- 24 vario intervals: **799.040 / 799.967 / 800.608 ms** (min/mean/max).
+- No skipped frames or pressure errors; temperature valid at 16 C, no reader fault.
+- Maximum temperature poll: 12.556 ms (50 ms reserved budget).
+- Maximum OLED chunk: 6.660 ms (30 ms reserved budget).
+- Control intervals: 798.964..801.080 ms.
+- Result publication: 82.800..83.948 ms after pressure start.
 
-With the BMP280 and OLED connected, redraw/blink stress enabled and physical
-motor output compile-time held at minimum, 24 consecutive intervals measured:
-
-- Vario conversion starts: min 798.964 ms, mean 800.028 ms, max 801.200 ms.
-- Start lateness: max 1.300 ms; no missed frames and no pressure errors.
-- Result publication offset after conversion start: 82.764..84.064 ms.
-- Control intervals: 798.908..800.620 ms.
-- Background display service call: maximum 6.656 ms (30 ms budget).
-
-The temperature sensor was absent (`temperature_valid=0`, `temperature_fault=1`),
-so this run is not evidence of regularity during an actual temperature read.
-Repeat with that sensor connected. These short-run min/max observations are
-not guaranteed worst-case bounds or a flight validation.
-
-
-### Follow-up with real motor temperature and full blink stress (18.11.2026)
-
-24 intervals: **799.040 / 799.967 / 800.608 ms** (min/mean/max), no skipped
-frames, no pressure errors. Temperature valid at 16 C, no reader fault.
-Maximum temperature poll 12.556 ms, below the 50 ms reserved budget; maximum
-OLED chunk 6.660 ms, below 30 ms. Control intervals 798.964..801.080 ms;
-result publication 82.800..83.948 ms after pressure start.
-
-The bench display update is now exclusive of the live display update: two
-updates per loop could reset the artificial blink phase when the real switch
-was off. This was fixed in the bench path before the final run; normal display
-logic is unchanged. These are observed short-run timings, not hard worst-case
-bounds or flight validation.
+These short-run observations are not hard worst-case bounds or flight validation.

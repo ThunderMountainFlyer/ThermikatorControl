@@ -3,6 +3,11 @@
 Eigenständiger Diagnose-Sketch für das bisher als **Arduino Yún / ATmega32U4**
 erkannte Board. Er ersetzt beim Flashen das Steuerprogramm. Er enthält keine
 Schubregelung, keinen USB-Anzeigetest und keine simulierten Sensorzeiten.
+Die mitgelieferte Displayimplementierung ist ein fester Vergleichsstand mit
+synchronen Übertragungen und Varioskala -2 bis +2 m/s. Sie misst nicht den
+aktuellen inkrementellen OLED-Treiber oder dessen Startanzeige. Für die
+800-ms-Regelung steht der `VARIO_TIMING_BENCH`-Build des Hauptprogramms bereit;
+siehe [Projekt-README](../../README.md#hardware-timing-verification).
 
 ## Vorbereitung und Flashen
 
@@ -12,16 +17,17 @@ Schubregelung, keinen USB-Anzeigetest und keine simulierten Sensorzeiten.
    0x76 an I2C (SDA 2, SCL 3), OneWire-Temperatursensor an 8, Poti an A0/18,
    Autothrust-Schalter an 10. Die Sensorversorgung unverändert lassen.
 3. `HardwareTiming.ino` im Ordner `HardwareTiming` mit der Arduino IDE öffnen.
-   Die drei mitgelieferten `OledGauge...`-Dateien müssen im selben Ordner bleiben.
+   Die mitgelieferten `OledGauge...`-Dateien und `MotorTemperature.h` müssen
+   im selben Ordner bleiben.
 4. Wie zuletzt das Board **Arduino Yún** und den tatsächlichen COM-Port wählen
-   (zuletzt COM4). Bibliotheken: Adafruit BMP280 Library, Adafruit Unified Sensor,
-   Adafruit BusIO, DallasTemperature, OneWire, Servo und SSD1306Ascii.
+   (COM4 ist im Beispiel unten ein Platzhalter). Bibliotheken: Adafruit BMP280
+   Library, Adafruit Unified Sensor, Adafruit BusIO, DallasTemperature, OneWire,
+   Servo und SSD1306Ascii.
 5. Kompilieren und hochladen. Die Firmware ist ausschließlich für ATmega32U4
    vorgesehen, nicht für eine ESP8266-NodeMCU.
 6. Seriellen Monitor auf **115200 Baud** öffnen. Nach `# READY.` den Autothrust-Schalter **AUS und dann EIN** schalten.
-   Erst diese Betätigung startet die Messung. Sie braucht typischerweise etwa
-   eine Minute. Bis zur Zeile `# DONE.` warten. Mit den zusätzlichen asynchronen Phasen
-   dauert ein vollständiger Lauf etwa ein bis zwei Minuten.
+   Erst diese Betätigung startet die Messung. Ein vollständiger Lauf dauert
+   typischerweise ein bis zwei Minuten. Bis zur Zeile `# DONE.` warten.
 7. Für eine Wiederholung den Schalter wieder AUS und dann EIN schalten.
    Ein bereits eingeschalteter Schalter löst beim Öffnen von USB keinen Lauf aus.
    Der Eingang an Pin 10 wird 50 ms entprellt. Einschalten bedeutet wie im
@@ -30,11 +36,12 @@ Schubregelung, keinen USB-Anzeigetest und keine simulierten Sensorzeiten.
    Während eines Laufs werden Schalterbetätigungen nicht als weitere Starts
    gespeichert; zum Wiederholen nach dem Ende neu schalten.
 
-Alternativ kann die Ausgabe mit `Messung-speichern.ps1` im Paket gespeichert
-werden. Dabei den seriellen Monitor geschlossen lassen:
+Alternativ kann die Ausgabe mit [Messung-speichern.ps1](../Messung-speichern.ps1)
+gespeichert werden. Den seriellen Monitor geschlossen lassen und vom
+Repository-Hauptverzeichnis aus starten (den tatsächlichen Port einsetzen):
 
 ```powershell
-./Messung-speichern.ps1 -Port COM4
+./diagnostics/Messung-speichern.ps1 -Port COM4
 ```
 
 Das Skript schreibt eine datierte Textdatei neben sich und wartet bis zu zehn
@@ -42,15 +49,16 @@ Minuten auf den Schalterstart. Danach hat der Messlauf 180 Sekunden Zeit.
 Für eine weitere Aufnahme das Skript erneut starten und den Schalter neu
 AUS/EIN betätigen. Falls Windows Skripte
 blockiert, kann die Ausgabe stattdessen aus dem seriellen Monitor kopiert werden.
-Die vollständige Datei zur Auswertung zurückgeben.
 
-Nach den Messungen das gewünschte Steuerprogramm aus `NewUIDesing` erneut flashen.
+Nach den Messungen das Steuerprogramm aus dem Repository-Hauptverzeichnis
+auf `main` erneut flashen.
 Dieser Sketch führt keinen automatischen Wechsel zurück zur Steuerung durch.
 
 ## Messungen
 
-Es werden acht Wiederholungen je Kennzahl erfasst. Einheit ist **Mikrosekunden**
-(1.000 µs = 1 ms). Initialisierungen werden einmal gemessen.
+Die Einzelaufruf- und Displaytests erfassen acht Wiederholungen je Kennzahl;
+die asynchronen Phasen erfassen Aufrufe fortlaufend. Einheit ist
+**Mikrosekunden** (1.000 µs = 1 ms). Initialisierungen werden einmal gemessen.
 
 | Kennzahl | Gemessener Abschnitt |
 | --- | --- |
@@ -85,9 +93,10 @@ bleiben die Vergleichsbasis. Mit `LEGACY_BASELINE=1` im Sketch lassen sich
 stattdessen die alten Tests ohne die neuen Async-Phasen kompilieren.
 
 Die OneWire-Gerätezahl, maximale konfigurierte Auflösung und parasitäre
-Versorgung werden mit ausgegeben. Die BMP280-Einstellungen werden durch
-`bmp.begin()` wie im Steuerprogramm gesetzt. `ctrl_meas` wird vor dem
-Wandlungstest ausgegeben. Für diesen Test wird kurz in Sleep/Forced gewechselt;
+Versorgung werden mit ausgegeben. Dieser Diagnose-Sketch verwendet für
+seine Register-Lesetests die Einstellungen nach `bmp.begin()` im Normalmodus;
+das Hauptprogramm stellt dagegen explizit auf getaktete Forced-Wandlungen um.
+`ctrl_meas` wird vor dem Wandlungstest ausgegeben. Für diesen Test wird kurz in Sleep/Forced gewechselt;
 Oversampling und Filter bleiben unverändert, danach wird der ursprüngliche Modus
 wiederhergestellt. Ein Fehler beim Wiederherstellen wird gemeldet.
 
@@ -117,8 +126,9 @@ Ein OLED-ACK bestätigt nur die I2C-Adresse, nicht die optische Darstellung.
 
 ## Aussagekraft und Grenzen
 
-- I2C bleibt bei **100 kHz**. Die kopierten Displaydateien sind unverändert aus
-  `NewUIDesing`, Commit **3dee895**. Das ist der Vergleichsstand dieser Messung.
+- I2C bleibt bei **100 kHz**. Die kopierten Displaydateien entsprechen Commit
+  **3dee895**. Das ist der feste Vergleichsstand dieser Messung; sie werden
+  unabhängig vom OLED-Treiber des Hauptprogramms verwendet.
 - Serienausgabe und Testvorbereitung liegen außerhalb der gemessenen Aufrufe.
   Interrupts, Servo-Timer und die USB-Verbindung bleiben aktiv. USB-Interrupts
   können daher in den gemessenen CPU-Zeiten enthalten sein.
@@ -138,22 +148,18 @@ Ein OLED-ACK bestätigt nur die I2C-Adresse, nicht die optische Darstellung.
 - Acht Stichproben liefern beobachtete Min-/Mittel-/Maximalwerte, keine
   garantierten Worst-Case-Zeiten und keine Freigabe für den Flugbetrieb.
 
-## Verifizierter Build
+## Build
 
-Arduino AVR Boards 1.8.6, Ziel `arduino:avr:yun`, 16 MHz:
-28.618 / 28.672 Byte Flash (99%), 738 / 2.560 Byte statisches RAM (28%).
-Erfolgreich kompiliert; Laufzeiten müssen mit den tatsächlich angeschlossenen
-Sensoren und dem Display erfasst werden.
+Ziel: Arduino AVR Boards 1.8.6, `arduino:avr:yun`, 16 MHz.
+Vom Repository-Hauptverzeichnis aus kompilieren. Flash- und RAM-Belegung zeigt
+der Compiler; besonders auf den knappen Flash-Speicher des ATmega32U4 achten.
+Laufzeiten werden mit den tatsächlich angeschlossenen Geräten erfasst.
 
 ```sh
-arduino-cli compile --fqbn arduino:avr:yun HardwareTiming
+arduino-cli compile --fqbn arduino:avr:yun diagnostics/HardwareTiming
 ```
 
-Im Downloadpaket liegt zusätzlich die dafür kompilierte HEX-Datei unter
-`firmware`. Sie ist nur für den genannten Board-/Taktstand vorgesehen.
-
-
-## Neue asynchrone Messphasen
+## Asynchrone Messphasen
 
 Die lokale Datei `MotorTemperature.h` ist bytegleich mit dem Temperaturcode
 aus dem Steuerprogramm, Commit 6ed1bd7. Ein abgeleitetes DallasTemperature-
@@ -178,7 +184,7 @@ der Async-Teil übersprungen. Die Schalter-Entprellung und Vorbereitungen gehör
 nicht zur gemessenen Zykluszeit. Die 638-ms-Phasen sind weiterhin Beispielzyklen,
 keine Messung der kompletten Autothrust-/Glättungsberechnung.
 
-| Neue Kennzahl | Bedeutung |
+| Kennzahl | Bedeutung |
 | --- | --- |
 | `async_request_command` | Nur Wandlungsbefehl, ohne auf das Ergebnis zu warten |
 | `async_ready_probe` | Einzelne Fertigabfrage; BUSY ist kein Fehler |
