@@ -6,13 +6,13 @@ The Thermikator was designed and first built by Markus Dörr:
 http://www.paragliding-kochertal.de/aktuell/emot.html
 
 The firmware on `main` uses the existing SSD1306 OLED and
-**800 ms fixed vario frames**.
+**250 ms fixed vario frames (4 Hz)**.
 
 ## Firmware versions
 
-The current firmware version is **2.0.2**, defined in `FirmwareVersion.h`.
+The current firmware version is **2.0.3**, defined in `FirmwareVersion.h`.
 At boot the OLED shows the version centered at 4x font scale (116 x 28 pixels
-for `2.0.2`). Once the complete image has been transmitted, one common
+for `2.0.3`). Once the complete image has been transmitted, one common
 **1,000 ms** window holds the version on screen and detects USB enumeration
 plus VBUS. The window ends before normal gauges/control start. Motor output
 stays at minimum throughout startup. Rendering is incremental; there is no
@@ -55,7 +55,7 @@ release. The ATmega32U4 target provides 28,672 bytes flash and 2,560 bytes RAM.
 
 ## Fixed vario frames
 
-The scheduler uses phase-locked **800,000 us** pressure-conversion starts,
+The scheduler uses phase-locked **250,000 us** pressure-conversion starts,
 independent of screen changes. Timing constants are in [FrameTiming.h](FrameTiming.h).
 
 `VarioSampler.h` explicitly selects BMP280 forced mode, temperature x16,
@@ -73,7 +73,7 @@ with the configured oversampling and scheduler.
 The driver retains the actual successful trigger timestamp. The height
 smoothing and vario calculation use the difference between these timestamps,
 not assumed display-loop duration. The original four-height average followed
-by four-vario average is retained. At 800 ms this filter has roughly 2.8 s group
+by four-vario average is retained. At 250 ms this filter has roughly 0.875 s group
 delay; changing its response is a separate tuning task. Gaps above 1.5 frames
 reset history instead of producing a climb spike. Bad status/pressure/timeout
 results invalidate vario data. Pressure must be finite and in 300..1100 hPa.
@@ -91,7 +91,7 @@ actual frame regularity; a successful build alone does not establish it.
 ## Background work and display
 
 The scheduler gives pressure trigger/read deadlines first priority. Control
-updates are scheduled at a fixed 800 ms cadence, nominally 20 ms after the
+updates are scheduled at a fixed 250 ms cadence, nominally 20 ms after the
 pressure readout slot. They continue even if pressure acquisition fails, so
 manual throttle and temperature limiting do not depend on a successful vario
 read. Invalid vario freezes the existing Autothrust reduction; it does not
@@ -126,15 +126,15 @@ Battery is still the original **unmeasured 100% placeholder** in live operation.
 ## Control behavior
 
 The calibrated potentiometer range remains 370..980, mapped to 0..100% request.
-Each 800 ms control step uses the current analog reading directly, without a
+Each 250 ms control step uses the current analog reading directly, without a
 moving average. A throttle change therefore reaches the next control step
-(up to about 800 ms later); the motor controller applies its own configured
+(up to about 250 ms later); the motor controller applies its own configured
 acceleration/deceleration ramp. Motor commands remain Servo.write(50)..
 Servo.write(140) on pin 9.
 
 Autothrust targets 0.6 m/s with a 0.2 m/s band: above 0.8 m/s it increases
 reduction; below 0.4 m/s it decreases reduction. Adjustment is
-**10 percentage points per second**, equivalent to eight points per 800 ms,
+**10 percentage points per second**, equivalent to 2.5 points per 250 ms,
 in both directions. Elapsed time is used and capped at one frame; missed iterations are not accumulated into a large power
 jump. While Autothrust is off, its stored reduction is retained but not applied;
 switching it off can therefore immediately restore the pilot's requested power,
@@ -180,7 +180,7 @@ the normal limiting logic. The real Autothrust switch remains active. The
 27.5-second sequence cycles temperature 20..90 C, battery 100..0%, requested
 power up/down, and vario 0 -> +1.4 -> 0 -> -0.6 -> 0 m/s in 0.2 m/s steps,
 holding the endpoints so all blocks can be seen. Background display updates can
-show each input step; power limiting itself now follows the same 800 ms control
+show each input step; power limiting itself now follows the same 250 ms control
 cadence as live operation. Physical motor output is always minimum in this mode.
 After leaving demo, sensors/history are reinitialized and the original battery
 placeholder is restored.
@@ -233,11 +233,12 @@ with the real wiring, displays and sensors. This benchmark is not a flight
 certification; verify PWM behavior and all limiting functions with propulsion
 power disconnected before operation.
 
-### Recorded scheduler measurement (18.11.2026)
+### Recorded scheduler measurement with 800-ms frames (18.11.2026)
 
 The run at commit `13c8676` used the BMP280, OLED and motor-temperature sensor,
 with artificial redraw/blink stress and motor output held at minimum.
-These are recorded measurements of that revision, not a new test of 2.0.2:
+These measurements used the former 800-ms frame interval. They do not verify
+the current 250-ms timing; that hardware measurement is still outstanding:
 
 - 24 vario intervals: **799.040 / 799.967 / 800.608 ms** (min/mean/max).
 - No skipped frames or pressure errors; temperature valid at 16 C, no reader fault.

@@ -100,7 +100,7 @@ void initializeMeasurements() {
   VarioAverage = ReducePower = 0;
   for (uint8_t i = 0; i < 4; ++i) velocities[i] = 0;
   // Readout is planned 80 ms after the first start at +100 ms. Control
-  // follows at +200 ms, then every 800 ms, even if a sensor read fails.
+  // follows at +200 ms, then every 250 ms, even if a sensor read fails.
   lastControlUs = micros() - uint32_t(VarioFrameUs);
   nextControlUs = micros() + 200000UL;
   measurementsReady = true;
@@ -149,7 +149,7 @@ void control(bool testMode, uint32_t now) {
     PotiSetPower = map(poti, MinPoti, MaxPoti, 0, 100);
   }
   const bool autothrust = digitalRead(AutothrustPin) != 0;
-  // 10 percentage points per second, equivalent to 8 per 800-ms frame.
+  // 10 percentage points per second, equivalent to 2.5 per 250-ms frame.
   // No dependence on background/UI loop speed. Do not accumulate missed steps.
   const float seconds = min(now - lastControlUs, VarioFrameUs) * 0.000001f;
   lastControlUs = now;

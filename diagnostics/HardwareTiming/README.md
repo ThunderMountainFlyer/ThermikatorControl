@@ -6,7 +6,7 @@ Schubregelung, keinen USB-Anzeigetest und keine simulierten Sensorzeiten.
 Die mitgelieferte Displayimplementierung ist ein fester Vergleichsstand mit
 synchronen Übertragungen und Varioskala -2 bis +2 m/s. Sie misst nicht den
 aktuellen inkrementellen OLED-Treiber oder dessen Startanzeige. Für die
-800-ms-Regelung steht der `VARIO_TIMING_BENCH`-Build des Hauptprogramms bereit;
+250-ms-Regelung steht der `VARIO_TIMING_BENCH`-Build des Hauptprogramms bereit;
 siehe [Projekt-README](../../README.md#hardware-timing-verification).
 
 ## Vorbereitung und Flashen

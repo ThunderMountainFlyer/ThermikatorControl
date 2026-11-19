@@ -1,7 +1,7 @@
 #pragma once
 #include <stdint.h>
 
-constexpr uint32_t VarioFrameUs = 800000UL;
+constexpr uint32_t VarioFrameUs = 250000UL;
 constexpr uint32_t VarioReadDelayUs = 80000UL;
 // Signed differences handle micros() wrap for deadlines < 2^31 us away.
 constexpr bool deadlineReached(uint32_t now, uint32_t deadline) {
@@ -19,5 +19,5 @@ static_assert(deadlineReached(1000, 1000), "Due at deadline");
 static_assert(remainingTime(100, 1000) == 900, "Correct spare budget");
 static_assert(deadlineReached(20, UINT32_MAX - 10), "Deadline across wrap");
 static_assert(!deadlineReached(UINT32_MAX - 10, 20), "Future deadline across wrap");
-static_assert(followingFrame(100, 110) == 800100UL, "Keep phase after small delay");
-static_assert(followingFrame(100, 1600110) == 2400100UL, "Skip overdue slots");
+static_assert(followingFrame(100, 110) == 250100UL, "Keep phase after small delay");
+static_assert(followingFrame(100, 500110) == 750100UL, "Skip overdue slots");
